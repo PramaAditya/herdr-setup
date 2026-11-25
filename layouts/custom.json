@@ -103,7 +103,6 @@
             {
               "id": "main-col",
               "type": "column",
-              "gap": 8,
               "children": [
                 {
                   "id": "main",
@@ -137,56 +136,58 @@
                 {
                   "id": "customize-drawer",
                   "type": "column",
-                  "size": {
-                    "px": 320
-                  },
-                  "min": 180,
-                  "max": 700,
-                  "hidden": true,
                   "children": [
                     {
                       "id": "customize-drawer-header",
                       "type": "block",
-                      "size": {
-                        "px": 34
-                      },
                       "content": {
                         "mod": "customize-drawer"
+                      },
+                      "size": {
+                        "px": 34
                       }
                     },
                     {
                       "id": "customize-drawer-body",
                       "type": "row",
-                      "gap": 8,
                       "children": [
                         {
                           "id": "customize-drawer-term",
                           "type": "block",
                           "content": {
-                            "terminal": ""
+                            "terminal": "t1f"
+                          },
+                          "size": {
+                            "weight": 1
                           }
                         },
                         {
                           "id": "customize-drawer-files",
                           "type": "block",
-                          "size": {
-                            "px": 280
-                          },
-                          "min": 200,
-                          "max": 500,
-                          "hidden": true,
                           "content": {
                             "mod": "files",
                             "props": {
                               "drawer": true
                             }
-                          }
+                          },
+                          "size": {
+                            "px": 280
+                          },
+                          "min": 200,
+                          "max": 500
                         }
-                      ]
+                      ],
+                      "gap": 8
                     }
-                  ]
+                  ],
+                  "size": {
+                    "px": 320
+                  },
+                  "min": 180,
+                  "max": 700
                 }
-              ]
+              ],
+              "gap": 8
             },
             {
               "id": "panel",
@@ -196,6 +197,13 @@
                   "id": "panel-body",
                   "type": "stack",
                   "children": [
+                    {
+                      "id": "todoist",
+                      "type": "block",
+                      "content": {
+                        "mod": "todoist"
+                      }
+                    },
                     {
                       "id": "kanban",
                       "type": "block",
@@ -222,7 +230,7 @@
                 }
               ],
               "size": {
-                "px": 368
+                "px": 473
               },
               "min": 280,
               "max": 900,

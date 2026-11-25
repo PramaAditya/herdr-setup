@@ -251,7 +251,7 @@ export default class Tabs extends View {
       run("layout.hide", { id: "panel" });
     }
     const baseEnabled = shared("workspace.panels") ?? ["files", "changes"];
-    const enabled = showKanban ? ["kanban", ...baseEnabled] : baseEnabled;
+    const enabled = [...(showKanban ? ["kanban"] : []), "todoist", ...baseEnabled];
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
@@ -271,6 +271,7 @@ export default class Tabs extends View {
         .children(normalTabs.map((c, i) => item(c, i, true))))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
       .when(showKanban, el => el.child(panelButton("kanban", "Kanban", "mods/workspace-chrome/layers.svg")))
+      .child(panelButton("todoist", "Todoist", "mods/workspace-chrome/circle-check.svg"))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
