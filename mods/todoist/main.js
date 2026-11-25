@@ -3,7 +3,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState } from "gpui-base";
 import { appHome, readTextFile, theme } from "herdr";
 
-const API_BASE = "https://api.todoist.com/rest/v2";
+const API_BASE = "https://api.todoist.com/api/v1";
 
 async function loadToken() {
   try {
@@ -59,15 +59,17 @@ export default class Todoist extends View {
           this.error = `Todoist API error (${tasksRes.status})`;
           return;
         }
-        const tasks = await tasksRes.json();
+        const tasksJson = await tasksRes.json();
+        const tasks = Array.isArray(tasksJson) ? tasksJson : tasksJson?.results;
         if (projRes?.ok) {
-          const projs = await projRes.json();
+          const projJson = await projRes.json();
+          const projs = Array.isArray(projJson) ? projJson : projJson?.results;
           if (Array.isArray(projs)) {
             this.projects = new Map(projs.map((p) => [p.id, p.name]));
           }
         }
         if (Array.isArray(tasks)) {
-          tasks.sort((a, b) => (b.priority ?? 1) - (a.priority ?? 1) || (a.order ?? 0) - (b.order ?? 0));
+          tasks.sort((a, b) => (b.priority ?? 1) - (a.priority ?? 1) || (a.child_order ?? a.order ?? 0) - (b.child_order ?? b.order ?? 0));
           this.tasks = tasks;
         }
         this.error = null;
