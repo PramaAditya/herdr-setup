@@ -1,8 +1,6 @@
-import { readFile } from "fs/promises";
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { closeOverlay, home, props, theme } from "herdr";
-
+import { closeOverlay, home, props, readTextFile, theme } from "herdr";
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 function stateFile(terminalId) {
@@ -33,8 +31,8 @@ export default class OmpPeek extends View {
       const { terminal, subagentId } = props() ?? {};
       if (!terminal || !subagentId) return;
       try {
-        const raw = await readFile(stateFile(terminal), "utf8");
-        const parsed = JSON.parse(raw);
+        const raw = await readTextFile(stateFile(terminal), { on: null });
+        const parsed = raw ? JSON.parse(raw) : null;
         this.sub = parsed?.subagents?.[subagentId] ?? null;
       } catch {
         // file may not exist yet or was cleaned up

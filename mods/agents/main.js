@@ -1,9 +1,8 @@
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
-import { readFile, readdir } from "fs/promises";
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, home } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, home, readTextFile } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -87,9 +86,10 @@ function icon(p, size, color) {
 
 export default class Agents extends View {
   init(_props, cx) {
-    if (props()?.sortMenu) return;
+    if (props()?.sortMenu || props()?.agentMenu) return;
     this.folded = new Set();
     this.ompSubs = new Map();
+    this.ompMeta = new Map();
     this.ompExpanded = new Set();
     this.ompSubsSig = "";
     // Each agent's last state and when it changed (ms), kept across restarts.
@@ -112,38 +112,42 @@ export default class Agents extends View {
 
   async loadOmpSubagents() {
     const next = new Map();
+    const nextMeta = new Map();
     const sigParts = [];
-    try {
-      const dir = OMP_SUBAGENTS_DIR();
-      const files = await readdir(dir);
-      for (const f of files) {
-        if (!f.endsWith(".json")) continue;
-        try {
-          const raw = await readFile(`${dir}/${f}`, "utf8");
-          const parsed = JSON.parse(raw);
-          const term = parsed?.terminal;
-          const subsObj = parsed?.subagents;
-          if (!term || !subsObj || typeof subsObj !== "object") continue;
-          const list = Object.values(subsObj).sort((a, b) => {
-            if (a.status === "working" && b.status !== "working") return -1;
-            if (b.status === "working" && a.status !== "working") return 1;
-            return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-          });
-          if (list.length > 0) {
-            next.set(term, list);
-            sigParts.push(`${term}:${parsed.updatedAt}:${list.length}`);
-          }
-        } catch {
-          // ignore transient write/parse errors
+    const dir = OMP_SUBAGENTS_DIR();
+    const live = agents();
+    for (const a of live) {
+      if (!a.address || a.address.includes("/")) continue;
+      const safe = String(a.address).replace(/[^A-Za-z0-9._-]/g, "_");
+      try {
+        const raw = await readTextFile(`${dir}/${safe}.json`, { on: null });
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const term = parsed?.terminal || a.address;
+        if (parsed?.sessionId) {
+          nextMeta.set(term, { sessionId: parsed.sessionId });
+          sigParts.push(`m:${term}:${parsed.sessionId}`);
         }
+        const subsObj = parsed?.subagents;
+        if (!subsObj || typeof subsObj !== "object") continue;
+        const list = Object.values(subsObj).sort((a, b) => {
+          if (a.status === "working" && b.status !== "working") return -1;
+          if (b.status === "working" && a.status !== "working") return 1;
+          return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+        });
+        if (list.length > 0) {
+          next.set(term, list);
+          sigParts.push(`${term}:${parsed.updatedAt}:${list.length}`);
+        }
+      } catch {
+        // ignore missing or transient write/parse errors
       }
-    } catch {
-      // directory may not exist yet
     }
     const sig = sigParts.sort().join("|");
     if (sig !== this.ompSubsSig) {
       this.ompSubsSig = sig;
       this.ompSubs = next;
+      this.ompMeta = nextMeta;
     }
   }
 
@@ -216,6 +220,32 @@ export default class Agents extends View {
         .child(svg(`mods/workspace-chrome/${s.icon}.svg`).size(14).flex_none().text_color(t.muted))
         .child(div().flex_1().child(s.label))
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
+  }
+  agentMenu(t, menu) {
+    const sessionId = menu?.sessionId;
+    return v_flex()
+      .w_full()
+      .p(5)
+      .bg(t.popover)
+      .text_size(12.8)
+      .child(
+        h_flex()
+          .id("copy-omp-session")
+          .h(31)
+          .px(8)
+          .gap(9)
+          .rounded(7)
+          .items_center()
+          .text_color(sessionId ? t.foreground : t.dim)
+          .when(Boolean(sessionId), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)))
+          .on_click((_e, cx) => {
+            if (!sessionId) return;
+            cx.write_to_clipboard(sessionId);
+            closeOverlay(props().overlay);
+          })
+          .child(svg("icons/omp.svg").size(14).flex_none().text_color(sessionId ? t.muted : t.dim))
+          .child(div().flex_1().truncate().child(sessionId ? "Copy OMP session ID" : "Session ID unavailable"))
+      );
   }
 
   peek(addr) {
@@ -362,6 +392,7 @@ export default class Agents extends View {
   render(cx) {
     const t = theme();
     if (props()?.sortMenu) return this.sortMenu(t);
+    if (props()?.agentMenu) return this.agentMenu(t, props().agentMenu);
     const collapsed = narrow();
     const sort = sortOf();
     const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
@@ -506,6 +537,19 @@ export default class Agents extends View {
           cx.notify();
         })
         .on_click(() => run("pane.focus", { pane: a.pane }))
+        .when(String(a.program?.key ?? "").toLowerCase() === "omp", (el) =>
+          el.on_mouse_down("right", (_e, cx) => {
+            cx.stop_propagation();
+            const sessionId = this.ompMeta?.get(a.address)?.sessionId ?? null;
+            openOverlay({
+              mod: "agents",
+              kind: "popup",
+              width: 220,
+              height: 44,
+              props: { agentMenu: { address: a.address, sessionId } },
+            });
+          })
+        )
         .when(Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
             cx.stop_propagation();
