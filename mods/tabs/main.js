@@ -1,6 +1,7 @@
+import { readdir } from "fs/promises";
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { appHome, home, spaces, panes, terminals, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { appHome, home, spaces, panes, focused, terminals, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
 
 const CUSTOMIZE_TARGETS = [
   {
@@ -113,6 +114,32 @@ export default class Tabs extends View {
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
+    this.kanbanCache = new Map();
+    this.kanbanPending = new Set();
+  }
+
+  hasKanban(cwd, cx) {
+    if (!cwd) return false;
+    const key = normPath(cwd);
+    if (this.kanbanCache.has(key)) return this.kanbanCache.get(key);
+    if (!this.kanbanPending.has(key) && cx) {
+      this.kanbanPending.add(key);
+      const sep = cwd.includes("\\") ? "\\" : "/";
+      const dir = `${cwd.replace(/[\\/]+$/, "")}${sep}.kanban`;
+      cx.spawn(async (cx) => {
+        let ok = false;
+        try {
+          await readdir(dir);
+          ok = true;
+        } catch {
+          ok = false;
+        }
+        this.kanbanCache.set(key, ok);
+        this.kanbanPending.delete(key);
+        cx.notify();
+      });
+    }
+    return false;
   }
 
   // One tab per wheel notch. A touchpad or smooth-scrolling mouse sends many
@@ -166,7 +193,7 @@ export default class Tabs extends View {
     localStorage.setItem("panels", JSON.stringify(this.panels));
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     const space = spaces().find(p => p.active);
     const shown = space?.tabs ?? [];
@@ -209,7 +236,19 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    const enabled = shared("workspace.panels") ?? ["files", "changes"];
+    const f = focused();
+    const activePane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
+    let activeCwd = activePane?.cwd || f?.cwd || null;
+    if (activeCwd) {
+      this.lastCwd = { space: space?.id, cwd: activeCwd };
+    } else if (this.lastCwd?.space === space?.id) {
+      activeCwd = this.lastCwd.cwd;
+    } else {
+      activeCwd = space?.folder || null;
+    }
+    const showKanban = this.hasKanban(activeCwd, cx);
+    const baseEnabled = shared("workspace.panels") ?? ["files", "changes"];
+    const enabled = showKanban ? ["kanban", ...baseEnabled] : baseEnabled;
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
@@ -263,12 +302,10 @@ export default class Tabs extends View {
             )
             .when(status === "blocked" || status === "done", (el) =>
               el.child(div().size(5).rounded_full().bg(t[status]).absolute().top(4).right(4))
-            )
-            .when(Boolean(existing) && !isActive && status !== "working" && status !== "blocked" && status !== "done", (el) =>
-              el.child(div().size(5).rounded_full().bg(t.accent).absolute().top(4).right(4))
             );
         })
       ))
+      .when(showKanban, el => el.child(panelButton("kanban", "Kanban", "mods/workspace-chrome/layers.svg")))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

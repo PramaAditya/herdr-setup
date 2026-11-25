@@ -12,6 +12,8 @@ Personal [Herdr](https://herdr.dev) configuration, custom layout, themes, and mo
 | `layouts/custom.json` | Custom workspace layout |
 | `mods/tabs/` | Top tab bar with persistent icon-only `Customize Herdr` & `Customize OMP` tabs on the right of `+` |
 | `mods/agents/` | Agents sidebar hiding customize tabs + live OMP subagent subtree (max 3 shown, expand/collapse) |
+| `mods/kanban/` | Read-only `.kanban/` board panel (auto-detected per project; opens cards in `file-viewer`) |
+| `mods/toast/` | Toast notifications with `<Space> / ` prefix stripped for `Customize Herdr` & `Customize OMP` |
 | `mods/omp-peek/` | Read-only live overlay to inspect running OMP subagents without pausing the main OMP thread |
 | `mods/files/` | Files panel configured to open clicked files in a main tab while preserving the current folder |
 | `mods/file-viewer/` | Read-only main-tab file viewer with syntax highlighting and reload |
