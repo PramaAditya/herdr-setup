@@ -90,8 +90,11 @@ async function directory(path, on) {
 
 export default class Files extends View {
   init(_props, cx) {
+    if (props()?.contextMenu) return;
     this.saved = new Map();
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
+    this.createInput = InputState.new({ placeholder: "name..." });
+    this.createInput.on("submit", (_e, cx) => this.commitCreate(cx));
     this.refresh(cx);
     cx.timer.every(500, cx => this.refreshIfDue(cx));
   }
@@ -255,21 +258,16 @@ export default class Files extends View {
   }
 
   startCreate(kind, parent, cx) {
-    this.cancelCreate();
     if (parent && !this.folders.has(parent)) {
       this.toggle(parent, cx);
     }
-    const input = InputState.new({
-      placeholder: kind === "folder" ? "folder-name" : "filename.ext",
-    });
-    input.on("submit", (_e, cx) => this.commitCreate(cx));
-    this.creating = { kind, parent: parent || "", input, error: null };
-    input.focus();
+    this.createInput.set_value("");
+    this.creating = { kind, parent: parent || "", input: this.createInput, error: null };
+    this.createInput.focus();
     cx.notify();
   }
 
   cancelCreate(cx) {
-    if (this.creating?.input) this.creating.input.release();
     this.creating = null;
     if (cx) cx.notify();
   }
