@@ -2,6 +2,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { appHome, home, spaces, panes, focused, terminals, exec, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
 
+const CUSTOMIZE_SPACE = "__customize__";
 const CUSTOMIZE_TARGETS = [
   {
     id: "herdr",
@@ -69,15 +70,13 @@ function openOrFocusCustomize(target) {
     return;
   }
 
-  const allSpaces = spaces();
-  const active = allSpaces.find((s) => s.active);
-  const localSpace = active && !active.machine ? active : allSpaces.find((s) => !s.machine);
+  const customizeSpace = spaces().find((s) => !s.machine && s.name === CUSTOMIZE_SPACE);
   const folder = target.folder();
 
-  if (localSpace) {
-    run("tab.new", { name: target.tabName, space: localSpace.id, folder, argv: ["omp"] });
+  if (customizeSpace) {
+    run("tab.new", { name: target.tabName, space: customizeSpace.id, folder, argv: ["omp"] });
   } else {
-    run("space.new", { name: target.spaceName, tab: target.tabName, folder, argv: ["omp"], machine: "" });
+    run("space.new", { name: CUSTOMIZE_SPACE, tab: target.tabName, folder, argv: ["omp"], machine: "" });
   }
 }
 
@@ -248,6 +247,9 @@ export default class Tabs extends View {
     }
     const on = space?.machine ?? null;
     const showKanban = this.hasKanban(activeCwd, on, cx);
+    if (!showKanban && panel && !panel.hidden && body?.active === "kanban") {
+      run("layout.hide", { id: "panel" });
+    }
     const baseEnabled = shared("workspace.panels") ?? ["files", "changes"];
     const enabled = showKanban ? ["kanban", ...baseEnabled] : baseEnabled;
     this.syncPanel(space, panel, body, enabled);
