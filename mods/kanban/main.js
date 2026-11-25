@@ -98,7 +98,7 @@ export default class Kanban extends View {
     cx.spawn(async (cx) => {
       try {
         const res = isWin
-          ? await exec("cmd", ["/c", 'dir /b /a-d ".kanban\\*.md"'], { cwd, on })
+          ? await exec("powershell", ["-NoProfile", "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-ChildItem -LiteralPath '.kanban' -Filter '*.md' -File -Name"], { cwd, on })
           : await exec("ls", ["-1", ".kanban"], { cwd, on });
         if (res?.code !== 0) {
           if (this.loc?.cwd !== cwd) return;

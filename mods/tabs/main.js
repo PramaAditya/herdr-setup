@@ -128,9 +128,9 @@ export default class Tabs extends View {
         let ok = false;
         try {
           const res = isWin
-            ? await exec("cmd", ["/c", 'if exist ".kanban\\NUL" (exit 0) else (exit 1)'], { cwd, on })
+            ? await exec("powershell", ["-NoProfile", "-Command", "Test-Path -LiteralPath '.kanban' -PathType Container"], { cwd, on })
             : await exec("test", ["-d", ".kanban"], { cwd, on });
-          ok = res?.code === 0;
+          ok = isWin ? res?.stdout?.trim() === "True" : res?.code === 0;
         } catch {
           ok = false;
         }
