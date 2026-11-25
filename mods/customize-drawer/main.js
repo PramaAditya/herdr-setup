@@ -31,8 +31,15 @@ function findNode(node, id) {
 
 function cloneWithTerminal(node, termAddr) {
   if (!node || typeof node !== "object") return node;
-  if (node.id === "customize-drawer-term") {
-    return { ...node, content: { terminal: termAddr } };
+  if (node.id === "customize-drawer-body") {
+    const others = (node.children ?? []).filter((c) => c?.id !== "customize-drawer-term");
+    const termBlock = {
+      id: "customize-drawer-term",
+      type: "block",
+      content: { terminal: termAddr },
+      size: { weight: 1 },
+    };
+    return { ...node, children: [termBlock, ...others] };
   }
   if (Array.isArray(node.children)) {
     return { ...node, children: node.children.map((c) => cloneWithTerminal(c, termAddr)) };
