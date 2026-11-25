@@ -1,8 +1,7 @@
 // Read-only .kanban/ board viewer for the focused pane's project folder.
-import { readdir, readFile } from "fs/promises";
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, focused, run, theme } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, run, theme, window } from "herdr";
 
 const STATUS_ORDER = [
   { id: "in_progress", label: "In Progress", color: "working" },
@@ -13,15 +12,15 @@ const STATUS_ORDER = [
 ];
 
 const PRIORITY_RANK = { high: 3, medium: 2, low: 1 };
-
 function currentLocation(prev) {
   const space = spaces().find((s) => s.active);
   const f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   if (!pane?.cwd && !f?.cwd && prev && prev.space === space?.id && prev.cwd) {
-    return { cwd: prev.cwd, space: prev.space };
+    return { cwd: prev.cwd, on: prev.on, space: prev.space };
   }
-  return { cwd: pane?.cwd || f?.cwd || space?.folder || null, space: space?.id ?? null };
+  const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
+  return { cwd: pane?.cwd || f?.cwd || space?.folder || null, on, space: space?.id ?? null };
 }
 
 function parseCard(filename, fullPath, raw) {
@@ -82,7 +81,7 @@ export default class Kanban extends View {
 
   load(cx, silent = false) {
     const loc = currentLocation(this.loc);
-    const cwd = loc.cwd;
+    const { cwd, on } = loc;
     this.loc = loc;
     if (!cwd) {
       this.cards = [];
@@ -94,17 +93,30 @@ export default class Kanban extends View {
       this.loading = true;
       this.error = null;
     }
-    const dir = `${cwd.replace(/[\\/]+$/, "")}/.kanban`;
+    const base = cwd.replace(/[\\/]+$/, "");
+    const isWin = !on && window()?.platform === "windows";
     cx.spawn(async (cx) => {
       try {
-        const entries = await readdir(dir);
-        const mdFiles = entries.filter((f) => f.endsWith(".md")).sort();
+        const res = isWin
+          ? await exec("cmd", ["/c", 'dir /b /a-d ".kanban\\*.md"'], { cwd, on })
+          : await exec("ls", ["-1", ".kanban"], { cwd, on });
+        if (res?.code !== 0) {
+          if (this.loc?.cwd !== cwd) return;
+          this.cards = [];
+          this.error = "No .kanban/ folder in this project";
+          return;
+        }
+        const mdFiles = res.stdout
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter((f) => f.endsWith(".md"))
+          .sort();
         const parsed = [];
         for (const f of mdFiles) {
-          const fullPath = `${dir}/${f}`;
+          const fullPath = `${base}/.kanban/${f}`;
           try {
-            const raw = await readFile(fullPath, "utf8");
-            parsed.push(parseCard(f, fullPath, raw));
+            const raw = await readTextFile(fullPath, { on });
+            if (raw !== null) parsed.push(parseCard(f, fullPath, raw));
           } catch {
             // skip unreadable card
           }
@@ -136,7 +148,7 @@ export default class Kanban extends View {
       name: card.filename,
       space: space?.id,
       mod: "file-viewer",
-      props: { path: card.fullPath, label: `.kanban/${card.filename}`, on: null },
+      props: { path: card.fullPath, label: `.kanban/${card.filename}`, on: this.loc?.on ?? null },
     });
   }
 

@@ -1,7 +1,6 @@
-import { readdir } from "fs/promises";
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { appHome, home, spaces, panes, focused, terminals, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { appHome, home, spaces, panes, focused, terminals, exec, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
 
 const CUSTOMIZE_TARGETS = [
   {
@@ -118,19 +117,20 @@ export default class Tabs extends View {
     this.kanbanPending = new Set();
   }
 
-  hasKanban(cwd, cx) {
+  hasKanban(cwd, on, cx) {
     if (!cwd) return false;
-    const key = normPath(cwd);
+    const key = `${on ?? ""}:${normPath(cwd)}`;
     if (this.kanbanCache.has(key)) return this.kanbanCache.get(key);
     if (!this.kanbanPending.has(key) && cx) {
       this.kanbanPending.add(key);
-      const sep = cwd.includes("\\") ? "\\" : "/";
-      const dir = `${cwd.replace(/[\\/]+$/, "")}${sep}.kanban`;
+      const isWin = !on && window()?.platform === "windows";
       cx.spawn(async (cx) => {
         let ok = false;
         try {
-          await readdir(dir);
-          ok = true;
+          const res = isWin
+            ? await exec("cmd", ["/c", 'if exist ".kanban\\NUL" (exit 0) else (exit 1)'], { cwd, on })
+            : await exec("test", ["-d", ".kanban"], { cwd, on });
+          ok = res?.code === 0;
         } catch {
           ok = false;
         }
@@ -246,7 +246,8 @@ export default class Tabs extends View {
     } else {
       activeCwd = space?.folder || null;
     }
-    const showKanban = this.hasKanban(activeCwd, cx);
+    const on = space?.machine ?? null;
+    const showKanban = this.hasKanban(activeCwd, on, cx);
     const baseEnabled = shared("workspace.panels") ?? ["files", "changes"];
     const enabled = showKanban ? ["kanban", ...baseEnabled] : baseEnabled;
     this.syncPanel(space, panel, body, enabled);
