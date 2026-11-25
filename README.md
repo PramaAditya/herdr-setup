@@ -9,15 +9,19 @@ Personal [Herdr](https://herdr.dev) configuration, custom layout, themes, and mo
 | `settings.json` | Core Herdr app settings (theme, font, zoom, layout) |
 | `keys.json` | Custom keybindings |
 | `themes/` | Custom color themes |
-| `layouts/custom.json` | Custom workspace layout |
-| `mods/tabs/` | Top tab bar with persistent icon-only `Customize Herdr` & `Customize OMP` tabs on the right of `+` |
-| `mods/agents/` | Agents sidebar hiding customize tabs + live OMP subagent subtree (max 3 shown, expand/collapse) |
-| `mods/kanban/` | Read-only `.kanban/` board panel (auto-detected per project; opens cards in `file-viewer`) |
-| `mods/toast/` | Toast notifications with `<Space> / ` prefix stripped for `Customize Herdr` & `Customize OMP` |
+| `layouts/custom.json` | Custom workspace layout with bottom `customize-drawer` split and `todoist` / `kanban` / `files` / `changes` panels |
+| `mods/tabs/` | Top tab bar with auto-detected `Kanban` button, `Todoist`, `Files`, and `Changes` panel toggles |
+| `mods/herdr-omp/` | Flex fill-width icon-only sidebar dock (`Herdr` / `OMP`) above Settings that toggles the bottom `customize-drawer` |
+| `mods/customize-drawer/` | Bottom split drawer header with `Herdr` / `OMP` switcher, dedicated drawer `Files` toggle, and close button |
+| `mods/spaces/` | Spaces sidebar hiding the dedicated `__customize__` space |
+| `mods/agents/` | Agents sidebar hiding customize tabs, live OMP subagent subtree (max 3 + expand/collapse), and right-click `Copy OMP session ID` |
 | `mods/omp-peek/` | Read-only live overlay to inspect running OMP subagents without pausing the main OMP thread |
-| `mods/files/` | Files panel configured to open clicked files in a main tab while preserving the current folder |
-| `mods/file-viewer/` | Read-only main-tab file viewer with syntax highlighting and reload |
-| `mods/herdr-omp/` | Legacy/optional Customize popover mod (kept for reference, not mounted in `layouts/custom.json`) |
+| `mods/kanban/` | Read-only `.kanban/` board panel (auto-detected per project; opens cards in `file-viewer`) |
+| `mods/todoist/` | Todoist API v1 active tasks panel (newest first, check-off, `Copy`, quick-add; reads `TODOIST_API_TOKEN` from `.env`) |
+| `mods/files/` | Files panel with right-click & header inline `New File` / `New Folder`, opening files in `file-viewer` (also supports drawer mode) |
+| `mods/file-viewer/` | Editable main-tab file editor with syntax highlighting, dirty indicator, `Ctrl+S` / `Save`, and `Reload` |
+| `mods/new-menu/` | `+` menu ordered with `oh-my-pi` (#1), `Antigravity` (#2), and `Gemini` hidden |
+| `mods/toast/` | Toast notifications with `<Space> / ` prefix stripped for `Customize Herdr` & `Customize OMP` |
 
 ## Restore on a New Machine (Agent-Friendly)
 
@@ -44,6 +48,13 @@ git checkout -f main
 ### 3. Install the Companion OMP Extension (for Subagent Peek)
 The OMP subagent subtree in `mods/agents/` and `mods/omp-peek/` reads live state written by the `herdr-subagents` OMP extension at `~/.omp/run/herdr-subagents/<HC_TERMINAL_ID>.json`.
 
+
+### 3b. Optional: Configure Todoist Token
+Create `~/.config/herdr-app/.env` (gitignored) with your Todoist API token:
+
+```env
+TODOIST_API_TOKEN=your_todoist_api_token_here
+```
 Ensure `~/.omp/agent/extensions/herdr-subagents/` exists (restore from your OMP extensions repo, or verify `package.json` + `index.ts` are installed there).
 
 ### 4. Launch Herdr
