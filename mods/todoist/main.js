@@ -69,7 +69,8 @@ export default class Todoist extends View {
           }
         }
         if (Array.isArray(tasks)) {
-          tasks.sort((a, b) => (b.priority ?? 1) - (a.priority ?? 1) || (a.child_order ?? a.order ?? 0) - (b.child_order ?? b.order ?? 0));
+          const ts = (x) => Date.parse(x.added_at || x.created_at || "") || 0;
+          tasks.sort((a, b) => ts(b) - ts(a));
           this.tasks = tasks;
         }
         this.error = null;
