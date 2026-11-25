@@ -1,7 +1,7 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, props, shared } from "herdr";
 
 // The panels share data in one VM, but their host tasks belong to separate copies.
 const scans = globalThis[Symbol.for("herdr.repoStatus.v2")] ??= new Map();
@@ -48,6 +48,10 @@ async function repoStatus(root, on, { after, visiting, urgent, allowInactive }, 
 }
 
 function location(prev) {
+  if (props()?.drawer) {
+    const drawer = shared("customize.drawer");
+    return { cwd: drawer?.folder || null, on: null, space: "customize-drawer" };
+  }
   const space = spaces().find(s => s.active), f = focused();
   const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
   if (!pane?.cwd && !f?.cwd && prev && prev.space === space?.id && prev.cwd) {

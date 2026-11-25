@@ -101,33 +101,92 @@
           "type": "row",
           "children": [
             {
-              "id": "main",
-              "type": "block",
-              "content": {
-                "tab": "active",
-                "pane": {
-                  "header": {
-                    "content": {
-                      "mod": "pane"
+              "id": "main-col",
+              "type": "column",
+              "gap": 8,
+              "children": [
+                {
+                  "id": "main",
+                  "type": "block",
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "header": {
+                        "content": {
+                          "mod": "pane"
+                        },
+                        "reveal": "always",
+                        "height": 30,
+                        "position": "top"
+                      },
+                      "background": "background",
+                      "border": {
+                        "width": 1,
+                        "color": "border"
+                      },
+                      "focus": {
+                        "width": 1,
+                        "color": "accent"
+                      },
+                      "radius": 10,
+                      "gap": 8,
+                      "lone": true
+                    }
+                  }
+                },
+                {
+                  "id": "customize-drawer",
+                  "type": "column",
+                  "size": {
+                    "px": 320
+                  },
+                  "min": 180,
+                  "max": 700,
+                  "hidden": true,
+                  "children": [
+                    {
+                      "id": "customize-drawer-header",
+                      "type": "block",
+                      "size": {
+                        "px": 34
+                      },
+                      "content": {
+                        "mod": "customize-drawer"
+                      }
                     },
-                    "reveal": "always",
-                    "height": 30,
-                    "position": "top"
-                  },
-                  "background": "background",
-                  "border": {
-                    "width": 1,
-                    "color": "border"
-                  },
-                  "focus": {
-                    "width": 1,
-                    "color": "accent"
-                  },
-                  "radius": 10,
-                  "gap": 8,
-                  "lone": true
+                    {
+                      "id": "customize-drawer-body",
+                      "type": "row",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "id": "customize-drawer-term",
+                          "type": "block",
+                          "content": {
+                            "terminal": ""
+                          }
+                        },
+                        {
+                          "id": "customize-drawer-files",
+                          "type": "block",
+                          "size": {
+                            "px": 280
+                          },
+                          "min": 200,
+                          "max": 500,
+                          "hidden": true,
+                          "content": {
+                            "mod": "files",
+                            "props": {
+                              "drawer": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
                 }
-              }
+              ]
             },
             {
               "id": "panel",

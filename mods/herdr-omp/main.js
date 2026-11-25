@@ -1,6 +1,6 @@
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { appHome, home, layout, openOverlay, panes, run, spaces, terminals, theme } from "herdr";
+import { appHome, home, layout, openOverlay, panes, run, setShared, shared, spaces, terminals, theme } from "herdr";
 
 const CUSTOMIZE_SPACE = "__customize__";
 const TARGETS = [
@@ -27,6 +27,17 @@ function findNode(node, id) {
     if (found) return found;
   }
   return null;
+}
+
+function cloneWithTerminal(node, termAddr) {
+  if (!node || typeof node !== "object") return node;
+  if (node.id === "customize-drawer-term") {
+    return { ...node, content: { terminal: termAddr } };
+  }
+  if (Array.isArray(node.children)) {
+    return { ...node, children: node.children.map((c) => cloneWithTerminal(c, termAddr)) };
+  }
+  return node;
 }
 
 const isNarrow = () => (findNode(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
@@ -67,30 +78,61 @@ function findCustomizeSession(target) {
   return null;
 }
 
-function openOrFocusCustomize(target) {
+function openOrToggleCustomize(target, cx) {
+  const root = layout();
+  const drawer = findNode(root, "customize-drawer");
+  const drawerState = shared("customize.drawer") ?? {};
+  const isDrawerOpen = Boolean(drawer && !drawer.hidden);
+
+  if (isDrawerOpen && drawerState.target === target.id) {
+    run("layout.hide", { id: "customize-drawer" });
+    return;
+  }
+
+  const folder = target.folder();
   const existing = findCustomizeSession(target);
-  if (existing) {
-    if (existing.tab.settled) run("tab.unsettle", { id: existing.tab.id });
-    run("space.select", { id: existing.space.id });
-    run("tab.select", { id: existing.tab.id });
-    if (existing.pane) run("pane.focus", { pane: existing.pane.pane });
+  if (existing?.pane?.terminal) {
+    const addr = existing.pane.terminal;
+    setShared("customize.drawer", { target: target.id, folder, terminal: addr });
+    run("layout.set", { layout: cloneWithTerminal(root, addr) });
+    run("layout.show", { id: "customize-drawer" });
+    run("pane.focus", { terminal: addr });
     return;
   }
 
   const customizeSpace = spaces().find((s) => !s.machine && s.name === CUSTOMIZE_SPACE);
-  const folder = target.folder();
-
   if (customizeSpace) {
-    run("tab.new", { name: target.tabName, space: customizeSpace.id, folder, argv: ["omp"] });
+    run("tab.new", { name: target.tabName, space: customizeSpace.id, folder, argv: ["omp"], focus: false });
   } else {
-    run("space.new", { name: CUSTOMIZE_SPACE, tab: target.tabName, folder, argv: ["omp"], machine: "" });
+    run("space.new", { name: CUSTOMIZE_SPACE, tab: target.tabName, folder, argv: ["omp"], machine: "", focus: false });
   }
-}
+  setShared("customize.drawer", { target: target.id, folder, terminal: "" });
+  run("layout.show", { id: "customize-drawer" });
 
+  cx.spawn(async (cx) => {
+    for (let i = 0; i < 30; i++) {
+      await cx.sleep(100);
+      const found = findCustomizeSession(target);
+      if (found?.pane?.terminal) {
+        const addr = found.pane.terminal;
+        setShared("customize.drawer", { target: target.id, folder, terminal: addr });
+        run("layout.set", { layout: cloneWithTerminal(layout(), addr) });
+        run("layout.show", { id: "customize-drawer" });
+        run("pane.focus", { terminal: addr });
+        cx.notify();
+        return;
+      }
+    }
+  });
+}
 export default class HerdrOmp extends View {
-  render() {
+  render(cx) {
     const t = theme();
     const collapsed = isNarrow();
+    const root = layout();
+    const drawer = findNode(root, "customize-drawer");
+    const drawerOpen = Boolean(drawer && !drawer.hidden);
+    const drawerTarget = shared("customize.drawer")?.target ?? null;
     const row = collapsed ? v_flex().gap(4).items_center() : h_flex().gap(6).items_center();
 
     return v_flex()
@@ -105,7 +147,7 @@ export default class HerdrOmp extends View {
         row.w_full().children(
           TARGETS.map((target) => {
             const existing = findCustomizeSession(target);
-            const isActive = Boolean(existing && (existing.pane?.focused || (existing.space.active && existing.tab.active)));
+            const isActive = drawerOpen && drawerTarget === target.id;
             const status = existing?.tab.status;
             return h_flex()
               .id(`herdr-omp-${target.id}`)
@@ -122,7 +164,7 @@ export default class HerdrOmp extends View {
               .border_color(isActive ? t.border : t.chrome)
               .bg(isActive ? t.selected : t.raised)
               .hover((s) => s.bg(t.hover))
-              .on_click(() => openOrFocusCustomize(target))
+              .on_click(() => openOrToggleCustomize(target, cx))
               .when(Boolean(existing), (el) =>
                 el.on_mouse_down("right", (_e, cx) => {
                   cx.stop_propagation();
