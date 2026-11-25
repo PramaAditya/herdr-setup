@@ -1,0 +1,20 @@
+# Runtime & local state
+telemetry/
+data/
+layouts/.state/
+view.json
+window.json
+shared.json
+seen.json
+installed.json
+update-notes.json
+update-notes-media/
+herdr-app.sock
+
+# Generated / shipped by Herdr on startup
+icons/
+frame/
+AGENTS.md
+*.d.ts
+mods/*/gpui-kit.d.ts
+mods/*/jsconfig.json
