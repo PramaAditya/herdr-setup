@@ -4,7 +4,7 @@
 // a command "worktree" opens the worktree dialog instead.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, HoverCard } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, hc, home } from "herdr";
 
 const OMP_SESSIONS_SCRIPT = `
@@ -254,10 +254,9 @@ export default class Menu extends View {
         cx.notify();
       })
       .children(
-        list.map((it, i) =>
-          v_flex()
-            .when(i > 0 && (it[1].endsWith(".close") || it[1] === "app.help" || it[1] === "omp.resume.menu" || (it[1] === "app.theme" && list[i - 1][1] !== "app.theme")), el => el.child(div().mx(7).my(4).h(1).bg(t.border)))
-            .child(h_flex()
+        list.map((it, i) => {
+          const isFlyout = !inSub && it[1] === "omp.resume.menu";
+          const row = h_flex()
             .id(`mi-${inSub ? "sub-" : ""}${i}`)
             .h(31)
             .px(8)
@@ -273,8 +272,52 @@ export default class Menu extends View {
             .child(div().flex_1().min_w(0).truncate().child(it[0]))
             .child(div().text_size(11).text_color(t.dim).child(
               it[1] === "omp.resume.menu" ? "▸" : it[1] === "omp.resume" ? shortAge(it[2].mtime) : shortcut(it[1], it[2])
-            ))),
-        ),
+            ));
+
+          const flyout = isFlyout
+            ? HoverCard.new("omp-resume-flyout")
+                .anchor("top_right")
+                .open_delay(80)
+                .close_delay(220)
+                .trigger(row)
+                .content(
+                  v_flex()
+                    .w(248)
+                    .p(5)
+                    .rounded(8)
+                    .bg(t.popover)
+                    .border(1)
+                    .border_color(t.border)
+                    .text_size(12.8)
+                    .children(
+                      this.ompSessions.map((sess, idx) =>
+                        h_flex()
+                          .id(`omp-flyout-${idx}`)
+                          .h(31)
+                          .px(8)
+                          .gap(9)
+                          .rounded(7)
+                          .items_center()
+                          .cursor_pointer()
+                          .text_color(t.foreground)
+                          .hover((s) => s.bg(t.hover))
+                          .on_click(() => {
+                            const term = props()?.target?.terminal;
+                            closeOverlay(props()?.overlay);
+                            if (term) hc(["send", term, `omp --resume ${sess.uuid}`]);
+                          })
+                          .child(svg("icons/omp.svg").size(14).flex_none().text_color(t.muted))
+                          .child(div().flex_1().min_w(0).truncate().child(sess.title))
+                          .child(div().text_size(11).text_color(t.dim).child(shortAge(sess.mtime)))
+                      )
+                    )
+                )
+            : row;
+
+          return v_flex()
+            .when(i > 0 && (it[1].endsWith(".close") || it[1] === "app.help" || it[1] === "omp.resume.menu" || (it[1] === "app.theme" && list[i - 1][1] !== "app.theme")), el => el.child(div().mx(7).my(4).h(1).bg(t.border)))
+            .child(flyout);
+        }),
       );
   }
 }
