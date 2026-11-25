@@ -155,7 +155,7 @@
                           "id": "customize-drawer-term",
                           "type": "block",
                           "content": {
-                            "terminal": "t1f"
+                            "terminal": "t1g"
                           },
                           "size": {
                             "weight": 1
@@ -174,7 +174,8 @@
                             "px": 280
                           },
                           "min": 200,
-                          "max": 500
+                          "max": 500,
+                          "hidden": true
                         }
                       ],
                       "gap": 8
@@ -233,8 +234,7 @@
                 "px": 473
               },
               "min": 280,
-              "max": 900,
-              "hidden": true
+              "max": 900
             }
           ],
           "padding": 8,

@@ -59,7 +59,7 @@ export default class OmpPeek extends View {
     const status = sub?.status ?? "done";
     const working = status === "working";
     const elapsed = sub ? formatAge((sub.finishedAt ?? Date.now()) - sub.startedAt) : "";
-    const events = [...(sub?.events ?? [])].reverse();
+    const events = sub?.events ?? [];
 
     return v_flex()
       .size_full()
@@ -137,11 +137,54 @@ export default class OmpPeek extends View {
             el.child(div().p(12).text_color(t.dim).child("No tool calls or messages yet."))
           )
           .children(
-            events.map((ev, idx) =>
-              v_flex()
+            events.map((ev, idx) => {
+              if (ev.kind === "thinking") {
+                return v_flex()
+                  .id(`ev-${idx}-${ev.at}`)
+                  .pl(10)
+                  .pr(8)
+                  .py(5)
+                  .gap(3)
+                  .border_l(2)
+                  .border_color(t.muted)
+                  .child(
+                    h_flex()
+                      .gap(6)
+                      .items_center()
+                      .child(div().text_size(11).font_semibold().text_color(t.muted).child("💭 Thinking"))
+                      .child(div().flex_1())
+                      .child(div().text_size(10.5).text_color(t.dim).child(formatTime(ev.at)))
+                  )
+                  .when(Boolean(ev.detail), (el) =>
+                    el.child(div().text_size(11.5).text_color(t.muted).child(ev.detail))
+                  );
+              }
+              if (ev.kind === "text") {
+                return v_flex()
+                  .id(`ev-${idx}-${ev.at}`)
+                  .px(9)
+                  .py(7)
+                  .gap(4)
+                  .rounded(6)
+                  .bg(t.surface)
+                  .border(1)
+                  .border_color(t.border)
+                  .child(
+                    h_flex()
+                      .gap(6)
+                      .items_center()
+                      .child(div().text_size(11).font_semibold().text_color(t.accent).child("Assistant"))
+                      .child(div().flex_1())
+                      .child(div().text_size(10.5).text_color(t.dim).child(formatTime(ev.at)))
+                  )
+                  .when(Boolean(ev.detail), (el) =>
+                    el.child(div().text_size(12).text_color(t.foreground).child(ev.detail))
+                  );
+              }
+              return v_flex()
                 .id(`ev-${idx}-${ev.at}`)
                 .px(9)
-                .py(6)
+                .py(5)
                 .gap(2)
                 .rounded(6)
                 .bg(t.surface)
@@ -160,9 +203,7 @@ export default class OmpPeek extends View {
                             ? t.blocked
                             : ev.kind === "tool_start"
                               ? t.working
-                              : ev.kind === "text"
-                                ? t.accent
-                                : t.foreground
+                              : t.dim
                         )
                         .child(
                           ev.kind === "tool_start"
@@ -177,7 +218,48 @@ export default class OmpPeek extends View {
                 )
                 .when(Boolean(ev.detail), (el) =>
                   el.child(div().text_size(11.5).text_color(t.muted).child(ev.detail))
+                );
+            })
+          )
+          .when(Boolean(sub?.streamingThinking), (el) =>
+            el.child(
+              v_flex()
+                .id("streaming-thinking")
+                .pl(10)
+                .pr(8)
+                .py(5)
+                .gap(3)
+                .border_l(2)
+                .border_color(t.working)
+                .child(
+                  h_flex()
+                    .gap(6)
+                    .items_center()
+                    .child(div().w(10).text_color(t.working).frames(SPIN, 90).child(SPIN[0]))
+                    .child(div().text_size(11).font_semibold().text_color(t.working).child("💭 Thinking…"))
                 )
+                .child(div().text_size(11.5).text_color(t.muted).child(sub.streamingThinking))
+            )
+          )
+          .when(Boolean(sub?.streamingText), (el) =>
+            el.child(
+              v_flex()
+                .id("streaming-text")
+                .px(9)
+                .py(7)
+                .gap(4)
+                .rounded(6)
+                .bg(t.surface)
+                .border(1)
+                .border_color(t.accent)
+                .child(
+                  h_flex()
+                    .gap(6)
+                    .items_center()
+                    .child(div().w(10).text_color(t.accent).frames(SPIN, 90).child(SPIN[0]))
+                    .child(div().text_size(11).font_semibold().text_color(t.accent).child("Assistant…"))
+                )
+                .child(div().text_size(12).text_color(t.foreground).child(sub.streamingText))
             )
           )
       );
