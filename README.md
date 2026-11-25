@@ -1,63 +1,88 @@
-# Herdr Setup
+<h1 align="center">herdr-setup</h1>
 
-Personal [Herdr](https://herdr.dev) configuration, custom layout, themes, and mods.
+<p align="center">
+  <b>My personal <a href="https://herdr.dev">Herdr</a> setup — changes frequently.</b>
+  <br>
+  Custom GPUI mods, layout, keybindings, and live OMP subagent streaming.
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/workspace-Herdr-0ea5e9?style=flat-square" alt="Herdr">
+  <img src="https://img.shields.io/badge/custom_mods-13-8b5cf6?style=flat-square" alt="13 Custom Mods">
+  <img src="https://img.shields.io/badge/subagent_peek-live_streaming-22c55e?style=flat-square" alt="Live Subagent Streaming">
+  <img src="https://img.shields.io/badge/theme-dark-18181b?style=flat-square" alt="Dark Theme">
+</p>
 
-## What's Included
+<br>
 
-| Path | Description |
-| --- | --- |
-| `settings.json` | Core Herdr app settings (theme, font, zoom, layout) |
-| `keys.json` | Custom keybindings |
-| `themes/` | Custom color themes |
-| `layouts/custom.json` | Custom workspace layout with bottom `customize-drawer` split and `todoist` / `kanban` / `files` / `changes` panels |
-| `mods/tabs/` | Top tab bar with auto-detected `Kanban` button, `Todoist`, `Files`, and `Changes` panel toggles |
-| `mods/herdr-omp/` | Flex fill-width icon-only sidebar dock (`Herdr` / `OMP`) above Settings that toggles the bottom `customize-drawer` |
-| `mods/customize-drawer/` | Bottom split drawer header with `Herdr` / `OMP` switcher, dedicated drawer `Files` toggle, and close button |
-| `mods/spaces/` | Spaces sidebar hiding the dedicated `__customize__` space |
-| `mods/agents/` | Agents sidebar hiding customize tabs, live OMP subagent subtree (max 3 + expand/collapse), and right-click `Copy OMP session ID` |
-| `mods/omp-peek/` | Read-only live overlay to inspect running OMP subagents without pausing the main OMP thread |
-| `mods/kanban/` | Read-only `.kanban/` board panel (auto-detected per project; opens cards in `file-viewer`) |
-| `mods/todoist/` | Todoist API v1 active tasks panel (newest first, check-off, `Copy`, quick-add; reads `TODOIST_API_TOKEN` from `.env`) |
-| `mods/files/` | Files panel with right-click & header inline `New File` / `New Folder`, opening files in `file-viewer` (also supports drawer mode) |
-| `mods/file-viewer/` | Editable main-tab file editor with syntax highlighting, dirty indicator, `Ctrl+S` / `Save`, and `Reload` |
-| `mods/new-menu/` | `+` menu ordered with `oh-my-pi` (#1), `Antigravity` (#2), and `Gemini` hidden |
-| `mods/toast/` | Toast notifications with `<Space> / ` prefix stripped for `Customize Herdr` & `Customize OMP` |
+---
+## Why Herdr?
 
-## Restore on a New Machine (Agent-Friendly)
+This is my daily-driver [Herdr](https://herdr.dev) config. I tweak it constantly as my workflow evolves — mostly around running parallel [OMP](https://github.com/can1357/oh-my-pi) coding agents, streaming their subagents live without leaving the terminal, and keeping Kanban, Todoist, and file editing in one place.
 
-> **For OMP / AI Agents:** Follow the steps below to restore this Herdr setup on the current machine.
+```mermaid
+flowchart LR
+    A["OMP Main Session"] -->|"Spawns"| B["Subagents (scout / task / reviewer)"]
+    B -->|"Streams thinking & tools"| C["mods/omp-peek"]
+    A -->|"Sidebar tree"| D["mods/agents"]
+    E["Workspace Panels"] --> F["Kanban · Todoist · Files · Editor"]
+```
 
-### 1. Prerequisites
-- Install **Herdr** and launch it once so `~/.config/herdr-app` is initialized (generates `icons/`, `frame/`, `*.d.ts`, etc.).
-- Install **OMP** (`omp` CLI available on `PATH`).
+- **Live Subagent Tree & Streaming Peek:** `mods/agents` renders a live subtree of active OMP subagents right under the parent session. Clicking any subagent opens `mods/omp-peek` — a read-only, chronological stream of its thinking, assistant output per turn, and tool calls without interrupting the main thread.
+- **Built-in Productivity Panels:** `mods/kanban` auto-detects `.kanban/` boards per project, `mods/todoist` syncs active tasks, and `mods/files` + `mods/file-viewer` let you browse and edit files (`Ctrl+S`) without leaving Herdr.
+- **Dedicated Customize Drawer:** `mods/herdr-omp` and `mods/customize-drawer` dock a bottom split drawer for tweaking Herdr or OMP configs on the fly, hidden cleanly from your main spaces.
+- **Zero Lock-In:** Everything lives in plain JS (`gpui-kit` / `gpui-base`) and JSON inside `~/.config/herdr-app`.
 
-### 2. Restore Herdr Config & Mods
-Clone or copy this repository into Herdr's config directory (`~/.config/herdr-app` on macOS/Linux/Windows):
+<br>
+
+---
+
+## What's Inside
+
+| Module / Config | Purpose |
+| :--- | :--- |
+| `settings.json` & `keys.json` | Dark appearance, `0.8` zoom, disabled ligatures, and custom keybindings |
+| `layouts/custom.json` | Workspace layout with bottom `customize-drawer` split and right-side panels |
+| `mods/omp-peek/` | Read-only live streaming overlay for OMP subagents (thinking, text, tool calls) |
+| `mods/agents/` | Agents sidebar with live OMP subagent subtree and `Copy OMP session ID` |
+| `mods/tabs/` | Top bar with auto-detected `Kanban`, `Todoist`, `Files`, and `Changes` toggles |
+| `mods/kanban/` | Read-only `.kanban/` board panel; opens cards directly in `file-viewer` |
+| `mods/todoist/` | Todoist API v1 active tasks panel (check-off, copy, quick-add via `.env`) |
+| `mods/files/` & `mods/file-viewer/` | File tree with inline create/open and an editable main-tab viewer (`Ctrl+S`) |
+| `mods/herdr-omp/` & `mods/customize-drawer/` | Sidebar dock and bottom split drawer for live Herdr/OMP customization |
+| `mods/spaces/`, `mods/new-menu/`, `mods/toast/` | Workspace polish: hidden `__customize__` space, `oh-my-pi` first in `+` menu, clean toasts |
+
+<br>
+
+---
+
+## Try It / Restore on a New Machine
+
+No build step required. Launch [Herdr](https://herdr.dev) once so it initializes `~/.config/herdr-app`, then clone this repo into it:
 
 ```bash
-# Close Herdr first if it is running
+# Close Herdr first, then initialize and pull this setup
 cd ~/.config/herdr-app
-
-# Option A: Clone directly into an existing herdr-app folder
 git init
-git remote add origin <REPO_URL>
+git remote add origin https://github.com/PramaAditya/herdr-setup.git
 git fetch origin
 git checkout -f main
 ```
 
-### 3. Install the Companion OMP Extension (for Subagent Peek)
-The OMP subagent subtree in `mods/agents/` and `mods/omp-peek/` reads live state written by the `herdr-subagents` OMP extension at `~/.omp/run/herdr-subagents/<HC_TERMINAL_ID>.json`.
+### Optional Integrations
 
-
-### 3b. Optional: Configure Todoist Token
-Create `~/.config/herdr-app/.env` (gitignored) with your Todoist API token:
+1. **Live Subagent Streaming (`omp-peek`):** Requires [OMP](https://github.com/can1357/oh-my-pi) with the `herdr-subagents` extension installed at `~/.omp/agent/extensions/herdr-subagents/` (writes live JSON state to `~/.omp/run/herdr-subagents/`).
+2. **Todoist Panel:** Create `~/.config/herdr-app/.env` (gitignored) with your token:
 
 ```env
 TODOIST_API_TOKEN=your_todoist_api_token_here
 ```
-Ensure `~/.omp/agent/extensions/herdr-subagents/` exists (restore from your OMP extensions repo, or verify `package.json` + `index.ts` are installed there).
 
-### 4. Launch Herdr
-Start Herdr. It will automatically pick up `settings.json`, `keys.json`, `layouts/custom.json`, `themes/`, and all `mods/`.
+> **Note on Shipped Mods:** Herdr may move edited shipped mods (`tabs`, `agents`, `files`) to `<name>-edited` during app updates. If an update resets a shipped mod, check `git diff` and reapply.
 
-> **Note on Shipped Mods:** Herdr may move edited shipped mods (`tabs`, `agents`, `files`) to `<name>-edited` on app updates. If an update resets a shipped mod, compare with `git diff` and reapply.
+<br>
+
+---
+
+<p align="center">
+  <a href="https://herdr.dev">Herdr</a> · <a href="settings.json">Settings</a> · <a href="mods/omp-peek/main.js">OMP Peek Mod</a>
+</p>
