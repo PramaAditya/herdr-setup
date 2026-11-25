@@ -270,44 +270,6 @@ export default class Tabs extends View {
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(normalTabs.map((c, i) => item(c, i, true))))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
-      .child(div().w(1).h(16).mx(4).flex_none().bg(t.border))
-      .child(h_flex().flex_none().h_full().items_center().gap(3).children(
-        CUSTOMIZE_TARGETS.map((target) => {
-          const existing = findCustomizeSession(target);
-          const isActive = Boolean(existing && (existing.pane?.focused || (existing.space.active && existing.tab.active)));
-          const status = existing?.tab.status;
-          return h_flex()
-            .id(`customize-tab-${target.id}`)
-            .relative()
-            .h(29)
-            .w(30)
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .rounded(7)
-            .cursor_pointer()
-            .tooltip(target.tooltip)
-            .border(1)
-            .border_color(isActive ? t.border : t.chrome)
-            .bg(isActive ? t.raised : t.chrome)
-            .hover((s) => s.bg(t.hover))
-            .on_mouse_down("left", stop)
-            .on_click(() => openOrFocusCustomize(target))
-            .when(Boolean(existing), (el) =>
-              el.on_mouse_down("right", (_e, cx) => {
-                cx.stop_propagation();
-                openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: existing.tab.id, space: existing.space.id } } });
-              })
-            )
-            .child(target.icon(t, isActive))
-            .when(status === "working", (el) =>
-              el.child(div().size(5).rounded_full().bg(t.working).absolute().top(4).right(4))
-            )
-            .when(status === "blocked" || status === "done", (el) =>
-              el.child(div().size(5).rounded_full().bg(t[status]).absolute().top(4).right(4))
-            );
-        })
-      ))
       .when(showKanban, el => el.child(panelButton("kanban", "Kanban", "mods/workspace-chrome/layers.svg")))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))

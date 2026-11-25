@@ -50,6 +50,16 @@
           ]
         },
         {
+          "id": "herdr-omp",
+          "type": "block",
+          "content": {
+            "mod": "herdr-omp"
+          },
+          "size": {
+            "px": 43
+          }
+        },
+        {
           "id": "sidebar-footer",
           "type": "block",
           "content": {
