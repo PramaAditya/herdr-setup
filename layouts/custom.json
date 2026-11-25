@@ -29,7 +29,7 @@
               "id": "spaces",
               "type": "block",
               "content": {
-                "mod": "spaces"
+                "mod": "spaces-edited"
               },
               "size": {
                 "weight": 1
@@ -40,7 +40,7 @@
               "id": "agents",
               "type": "block",
               "content": {
-                "mod": "agents"
+                "mod": "agents-edited"
               },
               "size": {
                 "weight": 1
@@ -89,7 +89,7 @@
           "id": "tabs",
           "type": "block",
           "content": {
-            "mod": "tabs"
+            "mod": "tabs-edited"
           },
           "size": {
             "px": 42
@@ -112,7 +112,7 @@
                     "pane": {
                       "header": {
                         "content": {
-                          "mod": "pane"
+                          "mod": "pane-edited"
                         },
                         "reveal": "always",
                         "height": 30,
@@ -165,7 +165,7 @@
                           "id": "customize-drawer-files",
                           "type": "block",
                           "content": {
-                            "mod": "files",
+                            "mod": "files-edited",
                             "props": {
                               "drawer": true
                             }
@@ -182,10 +182,11 @@
                     }
                   ],
                   "size": {
-                    "px": 320
+                    "px": 454
                   },
                   "min": 180,
-                  "max": 700
+                  "max": 700,
+                  "hidden": true
                 }
               ],
               "gap": 8
@@ -216,7 +217,7 @@
                       "id": "files",
                       "type": "block",
                       "content": {
-                        "mod": "files"
+                        "mod": "files-edited"
                       }
                     },
                     {
@@ -227,14 +228,15 @@
                       }
                     }
                   ],
-                  "active": "files"
+                  "active": "todoist"
                 }
               ],
               "size": {
                 "px": 473
               },
               "min": 280,
-              "max": 900
+              "max": 900,
+              "hidden": true
             }
           ],
           "padding": 8,
