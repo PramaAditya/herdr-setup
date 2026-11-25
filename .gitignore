@@ -1,3 +1,7 @@
+# Local secrets (never commit)
+.env
+.env.*
+
 # Runtime & local state
 telemetry/
 data/

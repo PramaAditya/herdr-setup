@@ -1,8 +1,7 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, props, shared } from "herdr";
-
+import { v_flex, h_flex, Editor, EditorState, Input, InputState } from "gpui-base";
+import { spaces, panes, focused, exec, readTextFile, writeTextFile, watchFolder, theme, settings, window, run, props, shared, setShared, openOverlay, closeOverlay } from "herdr";
 // The panels share data in one VM, but their host tasks belong to separate copies.
 const scans = globalThis[Symbol.for("herdr.repoStatus.v2")] ??= new Map();
 
@@ -255,13 +254,177 @@ export default class Files extends View {
     });
   }
 
+  startCreate(kind, parent, cx) {
+    this.cancelCreate();
+    if (parent && !this.folders.has(parent)) {
+      this.toggle(parent, cx);
+    }
+    const input = InputState.new({
+      placeholder: kind === "folder" ? "folder-name" : "filename.ext",
+    });
+    input.on("submit", (_e, cx) => this.commitCreate(cx));
+    this.creating = { kind, parent: parent || "", input, error: null };
+    input.focus();
+    cx.notify();
+  }
+
+  cancelCreate(cx) {
+    if (this.creating?.input) this.creating.input.release();
+    this.creating = null;
+    if (cx) cx.notify();
+  }
+
+  commitCreate(cx) {
+    const c = this.creating;
+    if (!c || !this.root) return;
+    const rawName = c.input.value().trim().replace(/^[\\/]+|[\\/]+$/g, "");
+    if (!rawName || rawName.includes("..")) {
+      c.error = "Invalid name";
+      cx.notify();
+      return;
+    }
+    const relPath = c.parent ? `${c.parent}/${rawName}` : rawName;
+    const fullPath = `${this.root.replace(/[\\/]+$/, "")}/${relPath}`;
+    const kind = c.kind;
+    const on = this.on;
+    const isWin = !on && window()?.platform === "windows";
+    const root = this.root;
+
+    cx.spawn(async (cx) => {
+      try {
+        if (kind === "folder") {
+          const res = isWin
+            ? await exec("powershell", ["-NoProfile", "-Command", `New-Item -ItemType Directory -Force -Path '${fullPath.replace(/'/g, "''")}' | Out-Null`], { cwd: root, on })
+            : await exec("mkdir", ["-p", fullPath], { cwd: root, on });
+          if (res?.code !== 0) throw new Error(res?.stderr || "Failed to create folder");
+          this.folders.add(relPath);
+        } else {
+          const lastSlash = fullPath.lastIndexOf("/");
+          const parentDir = lastSlash > 0 ? fullPath.slice(0, lastSlash) : root;
+          if (isWin) {
+            await exec("powershell", ["-NoProfile", "-Command", `New-Item -ItemType Directory -Force -Path '${parentDir.replace(/'/g, "''")}' | Out-Null`], { cwd: root, on });
+          } else {
+            await exec("mkdir", ["-p", parentDir], { cwd: root, on });
+          }
+          if (!on) {
+            await writeTextFile(fullPath, "", null);
+          } else {
+            await exec("touch", [fullPath], { cwd: root, on });
+          }
+        }
+        this.cancelCreate();
+        await this.loadFolder(c.parent, this.context);
+        if (kind === "file") this.show(relPath);
+        cx.notify();
+      } catch (err) {
+        if (this.creating === c) {
+          c.error = String(err?.message || err || "Already exists or failed");
+          cx.notify();
+        }
+      }
+    });
+  }
+
+  contextMenu(t, menu) {
+    const trigger = (kind) => {
+      setShared("files.create", {
+        drawer: Boolean(menu.drawer),
+        parent: menu.parent || "",
+        kind,
+        ts: Date.now(),
+      });
+      closeOverlay(props().overlay);
+    };
+    const item = (id, icon, label, kind) =>
+      h_flex()
+        .id(id)
+        .h(30)
+        .px(9)
+        .gap(8)
+        .rounded(7)
+        .items_center()
+        .cursor_pointer()
+        .text_color(t.foreground)
+        .hover((s) => s.bg(t.hover))
+        .on_click(() => trigger(kind))
+        .child(svg(`mods/files/${icon}.svg`).size(14).flex_none().text_color(t.muted))
+        .child(div().flex_1().child(label));
+    return v_flex()
+      .w_full()
+      .p(5)
+      .gap(2)
+      .bg(t.popover)
+      .text_size(12.8)
+      .when(Boolean(menu.parent), (el) =>
+        el.child(div().px(9).pt(3).pb(4).truncate().text_size(11).text_color(t.dim).child(menu.parent))
+      )
+      .child(item("ctx-new-file", "file", "New File", "file"))
+      .child(item("ctx-new-folder", "folder", "New Folder", "folder"));
+  }
+
+  openMenu(parent, cx) {
+    cx.stop_propagation();
+    openOverlay({
+      mod: "files",
+      kind: "popup",
+      width: 190,
+      height: parent ? 96 : 74,
+      props: { contextMenu: { parent: parent || "", drawer: Boolean(props()?.drawer) } },
+    });
+  }
+
+  createRow(depth, t) {
+    const c = this.creating;
+    return v_flex()
+      .id("files-inline-create")
+      .pl(8 + depth * 18)
+      .pr(8)
+      .py(2)
+      .gap(2)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape") {
+          cx.stop_propagation();
+          this.cancelCreate(cx);
+        }
+      })
+      .child(
+        h_flex()
+          .h(26)
+          .gap(6)
+          .items_center()
+          .child(div().w(12).flex_none())
+          .child(svg(`mods/files/${c.kind === "folder" ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.accent))
+          .child(
+            Input.new(c.input)
+              .flex_1()
+              .min_w(0)
+              .h(24)
+              .px(6)
+              .rounded(5)
+              .bg(t.input)
+              .border(1)
+              .border_color(c.error ? t.blocked : t.accent)
+              .text_size(12.5)
+              .text_color(t.foreground)
+          )
+      )
+      .when(Boolean(c.error), (el) =>
+        el.child(div().pl(32).text_size(10.5).text_color(t.blocked).child(c.error))
+      );
+  }
+
   rows(prefix, depth, out, t) {
     if (out.length >= TOTAL || depth > 40) return out;
+    if (this.creating && this.creating.parent === prefix) {
+      out.push(this.createRow(depth, t));
+    }
     for (const entry of this.entries.get(prefix) ?? []) {
       if (out.length >= TOTAL) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
+      const targetParent = entry.dir ? path : prefix;
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
+        .on_mouse_down("right", (_e, cx) => this.openMenu(targetParent, cx))
         .child(entry.dir ? svg(`mods/files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(`mods/files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
@@ -272,16 +435,44 @@ export default class Files extends View {
   }
 
   render(cx) {
+    const t = theme();
+    if (props()?.contextMenu) return this.contextMenu(t, props().contextMenu);
+
+    const req = shared("files.create");
+    if (req && req.ts !== this.lastCreateTs && Boolean(req.drawer) === Boolean(props()?.drawer)) {
+      this.lastCreateTs = req.ts;
+      this.startCreate(req.kind, req.parent, cx);
+    }
+
     if (key(this.context) !== this.context?.key) this.refresh(cx);
     else this.refreshIfDue(cx);
-    const t = theme();
     const font = this.code ? settings() : null;
+    const actionBtn = (id, icon, tip, kind) =>
+      div()
+        .id(id)
+        .size(22)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(5)
+        .cursor_pointer()
+        .text_color(t.muted)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .tooltip(tip)
+        .on_click((_e, cx) => this.startCreate(kind, "", cx))
+        .child(svg(icon).size(13));
+
     return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(h_flex().h(42).flex_none().px(14).gap(6).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Files"))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? "")))
-      .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+        .when(Boolean(this.root), (el) => el
+          .child(actionBtn("files-new-file", "mods/files/file.svg", "New File", "file"))
+          .child(actionBtn("files-new-folder", "mods/workspace-chrome/folder-plus.svg", "New Folder", "folder"))))
+      .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6)
+        .on_mouse_down("right", (_e, cx) => this.openMenu("", cx))
+        .children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
       .when(Boolean(this.file), el => el.child(this.code
