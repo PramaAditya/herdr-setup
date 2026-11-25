@@ -49,7 +49,7 @@ export default class Pane extends View {
       const safe = String(p.terminal).replace(/[^A-Za-z0-9._-]/g, "_");
       const file = `${home().replace(/[\\/]+$/, "")}/.omp/run/herdr-subagents/${safe}.json`;
       try {
-        const raw = await readTextFile(file);
+        const raw = await readTextFile(file, { on: null });
         const data = JSON.parse(raw);
         const next = typeof data?.contextPercent === "number" && Number.isFinite(data.contextPercent) ? Math.round(data.contextPercent) : null;
         if (next !== this.ctxPct) { this.ctxPct = next; cx.notify(); }
