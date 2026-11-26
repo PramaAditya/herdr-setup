@@ -4,17 +4,6 @@ import { theme, spaces, panes, knownAgents, run, openOverlay, closeOverlay, prop
 
 // The last agents each machine reported, shown at once while knownAgents() checks again.
 const KNOWN = "new-menu.agents";
-const HIDDEN_AGENTS = new Set(["gemini"]);
-const AGENT_ORDER = ["omp", "oh-my-pi", "antigravity"];
-const agentRank = (a) => {
-  const k = String(a.key ?? "").toLowerCase();
-  const n = String(a.name ?? "").toLowerCase();
-  const i = AGENT_ORDER.findIndex((x) => x === k || x === n);
-  return i === -1 ? 999 : i;
-};
-const isHiddenAgent = (a) =>
-  HIDDEN_AGENTS.has(String(a.key ?? "").toLowerCase()) ||
-  HIDDEN_AGENTS.has(String(a.name ?? "").toLowerCase());
 
 function shortcut(name) {
   const k = keys().find(b => b.section === "global" && b.action === name);
@@ -59,9 +48,8 @@ export default class NewMenu extends View {
   render() {
     const t = theme();
     const space = spaces().find(s => s.active);
-    const visible = this.agents.filter(a => !isHiddenAgent(a));
-    const installed = visible.filter(a => a.installed).sort((a, b) => agentRank(a) - agentRank(b));
-    const choices = this.failed ? installed : [...installed, ...visible.filter(a => !a.installed).slice(0, 2)];
+    const installed = this.agents.filter(a => a.installed);
+    const choices = this.failed ? installed : [...installed, ...this.agents.filter(a => !a.installed).slice(0, 2)];
     return v_flex().min_h(0).w_full().h(Math.min(491, 167 + Math.max(1, choices.length + (this.failed ? 1 : 0)) * 31)).bg(t.popover).p(5).text_size(12.8)
       .id("new-menu").track_focus(this.handle)
       .on_key_down((e) => {

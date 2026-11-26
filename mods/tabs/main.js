@@ -1,84 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { appHome, home, spaces, panes, focused, terminals, exec, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
-
-const CUSTOMIZE_SPACE = "__customize__";
-const CUSTOMIZE_TARGETS = [
-  {
-    id: "herdr",
-    tabName: "Customize Herdr",
-    spaceName: "Herdr",
-    tooltip: "Customize Herdr",
-    folder: () => appHome(),
-    icon: (t, active) => image("frame/welcome/herdr.png").size(15).rounded(3),
-  },
-  {
-    id: "omp",
-    tabName: "Customize OMP",
-    spaceName: "OMP",
-    tooltip: "Customize OMP (~/.omp)",
-    folder: () => `${home().replace(/[\\/]+$/, "")}/.omp`,
-    icon: (t, active) => svg("icons/omp.svg").size(14).text_color(active ? t.foreground : t.muted),
-  },
-];
-const CUSTOMIZE_TAB_NAMES = new Set(CUSTOMIZE_TARGETS.map((t) => t.tabName));
-const isCustomizeTab = (tab) => Boolean(tab.named && CUSTOMIZE_TAB_NAMES.has(tab.name));
-
-function normPath(p) {
-  return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-
-function findCustomizeSession(target) {
-  const targetDir = normPath(target.folder());
-  const allPanes = panes();
-  const termByAddr = new Map(terminals().map((t) => [t.address, t]));
-
-  for (const space of spaces()) {
-    if (space.machine) continue;
-    for (const tab of space.tabs) {
-      if (tab.named && tab.name === target.tabName) {
-        const pane = allPanes.find((p) => p.tab === tab.id && p.terminal) ?? allPanes.find((p) => p.tab === tab.id);
-        return { space, tab, pane };
-      }
-      const tabPanes = allPanes.filter((p) => p.tab === tab.id && p.terminal);
-      for (const pane of tabPanes) {
-        const term = termByAddr.get(pane.terminal);
-        const argv0 = String(term?.argv?.[0] ?? "").toLowerCase();
-        const isOmp =
-          argv0 === "omp" ||
-          argv0.endsWith("/omp") ||
-          argv0.endsWith("\\omp") ||
-          argv0.endsWith("omp.exe") ||
-          String(pane.program?.key ?? "").toLowerCase() === "omp" ||
-          String(pane.title ?? "").toLowerCase().includes("omp");
-        if (normPath(pane.cwd) === targetDir && isOmp) {
-          return { space, tab, pane };
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function openOrFocusCustomize(target) {
-  const existing = findCustomizeSession(target);
-  if (existing) {
-    if (existing.tab.settled) run("tab.unsettle", { id: existing.tab.id });
-    run("space.select", { id: existing.space.id });
-    run("tab.select", { id: existing.tab.id });
-    if (existing.pane) run("pane.focus", { pane: existing.pane.pane });
-    return;
-  }
-
-  const customizeSpace = spaces().find((s) => !s.machine && s.name === CUSTOMIZE_SPACE);
-  const folder = target.folder();
-
-  if (customizeSpace) {
-    run("tab.new", { name: target.tabName, space: customizeSpace.id, folder, argv: ["omp"] });
-  } else {
-    run("space.new", { name: CUSTOMIZE_SPACE, tab: target.tabName, folder, argv: ["omp"], machine: "" });
-  }
-}
+import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -112,33 +34,6 @@ export default class Tabs extends View {
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
-    this.kanbanCache = new Map();
-    this.kanbanPending = new Set();
-  }
-
-  hasKanban(cwd, on, cx) {
-    if (!cwd) return false;
-    const key = `${on ?? ""}:${normPath(cwd)}`;
-    if (this.kanbanCache.has(key)) return this.kanbanCache.get(key);
-    if (!this.kanbanPending.has(key) && cx) {
-      this.kanbanPending.add(key);
-      const isWin = !on && window()?.platform === "windows";
-      cx.spawn(async (cx) => {
-        let ok = false;
-        try {
-          const res = isWin
-            ? await exec("powershell", ["-NoProfile", "-Command", "Test-Path -LiteralPath '.kanban' -PathType Container"], { cwd, on })
-            : await exec("test", ["-d", ".kanban"], { cwd, on });
-          ok = isWin ? res?.stdout?.trim() === "True" : res?.code === 0;
-        } catch {
-          ok = false;
-        }
-        this.kanbanCache.set(key, ok);
-        this.kanbanPending.delete(key);
-        cx.notify();
-      });
-    }
-    return false;
   }
 
   // One tab per wheel notch. A touchpad or smooth-scrolling mouse sends many
@@ -192,13 +87,12 @@ export default class Tabs extends View {
     localStorage.setItem("panels", JSON.stringify(this.panels));
   }
 
-  render(cx) {
+  render() {
     const t = theme();
     const space = spaces().find(p => p.active);
     const shown = space?.tabs ?? [];
-    const normalTabs = shown.filter(tab => !isCustomizeTab(tab));
-    const active = normalTabs.findIndex(tab => tab.active);
-    const selected = normalTabs[active]?.id;
+    const active = shown.findIndex(tab => tab.active);
+    const selected = shown[active]?.id;
     if (selected !== this.selected || active !== this.selectedIndex) {
       this.selected = selected;
       this.selectedIndex = active;
@@ -207,19 +101,19 @@ export default class Tabs extends View {
     const stop = (_e, cx) => cx.stop_propagation();
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
-    const item = (c, i, inScroll = true) => {
+    const item = (c, i) => {
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program;
       const name = label(c, lead);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
-        .when(inScroll && i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
+        .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
-        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = c.id; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
+        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
           const from = this.pressed; this.pressed = null;
-          if (from !== null && from !== c.id) run("tab.move", { id: from, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
+          if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
@@ -235,23 +129,7 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    const f = focused();
-    const activePane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
-    let activeCwd = activePane?.cwd || f?.cwd || null;
-    if (activeCwd) {
-      this.lastCwd = { space: space?.id, cwd: activeCwd };
-    } else if (this.lastCwd?.space === space?.id) {
-      activeCwd = this.lastCwd.cwd;
-    } else {
-      activeCwd = space?.folder || null;
-    }
-    const on = space?.machine ?? null;
-    const showKanban = this.hasKanban(activeCwd, on, cx);
-    if (!showKanban && panel && !panel.hidden && body?.active === "kanban") {
-      run("layout.hide", { id: "panel" });
-    }
-    const baseEnabled = shared("workspace.panels") ?? ["files", "changes"];
-    const enabled = [...(showKanban ? ["kanban"] : []), "todoist", ...baseEnabled];
+    const enabled = shared("workspace.panels") ?? ["files", "changes"];
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
@@ -268,10 +146,8 @@ export default class Tabs extends View {
       .on_scroll_wheel(e => this.wheel(e))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
-        .children(normalTabs.map((c, i) => item(c, i, true))))
+        .children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
-      .when(showKanban, el => el.child(panelButton("kanban", "Kanban", "mods/workspace-chrome/layers.svg")))
-      .child(panelButton("todoist", "Todoist", "mods/workspace-chrome/circle-check.svg"))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

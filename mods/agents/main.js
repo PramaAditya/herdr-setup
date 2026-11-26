@@ -2,7 +2,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, home, readTextFile } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -65,10 +65,7 @@ const SORTS = [
 ];
 const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[0];
 const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
-const CUSTOMIZE_TAB_NAMES = new Set(["Customize Herdr", "Customize OMP"]);
 const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
-const OMP_SUBAGENTS_DIR = () => `${home().replace(/[\\/]+$/, "")}/.omp/run/herdr-subagents`;
-const OMP_SUB_LIMIT = 3;
 
 function duration(ms) {
   const m = Math.floor(ms / 60000);
@@ -86,12 +83,8 @@ function icon(p, size, color) {
 
 export default class Agents extends View {
   init(_props, cx) {
-    if (props()?.sortMenu || props()?.agentMenu) return;
+    if (props()?.sortMenu) return;
     this.folded = new Set();
-    this.ompSubs = new Map();
-    this.ompMeta = new Map();
-    this.ompExpanded = new Set();
-    this.ompSubsSig = "";
     // Each agent's last state and when it changed (ms), kept across restarts.
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
     if (!this.changed || typeof this.changed !== "object" || Array.isArray(this.changed)) this.changed = {};
@@ -100,55 +93,6 @@ export default class Agents extends View {
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
-    const refreshOmpSubs = (cx) => {
-      cx.spawn(async (cx) => {
-        await this.loadOmpSubagents();
-        cx.notify();
-      });
-    };
-    refreshOmpSubs(cx);
-    cx.timer.every(1000, refreshOmpSubs);
-  }
-
-  async loadOmpSubagents() {
-    const next = new Map();
-    const nextMeta = new Map();
-    const sigParts = [];
-    const dir = OMP_SUBAGENTS_DIR();
-    const live = agents();
-    for (const a of live) {
-      if (!a.address || a.address.includes("/")) continue;
-      const safe = String(a.address).replace(/[^A-Za-z0-9._-]/g, "_");
-      try {
-        const raw = await readTextFile(`${dir}/${safe}.json`, { on: null });
-        if (!raw) continue;
-        const parsed = JSON.parse(raw);
-        const term = parsed?.terminal || a.address;
-        if (parsed?.sessionId) {
-          nextMeta.set(term, { sessionId: parsed.sessionId });
-          sigParts.push(`m:${term}:${parsed.sessionId}`);
-        }
-        const subsObj = parsed?.subagents;
-        if (!subsObj || typeof subsObj !== "object") continue;
-        const list = Object.values(subsObj).sort((a, b) => {
-          if (a.status === "working" && b.status !== "working") return -1;
-          if (b.status === "working" && a.status !== "working") return 1;
-          return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-        });
-        if (list.length > 0) {
-          next.set(term, list);
-          sigParts.push(`${term}:${parsed.updatedAt}:${list.length}`);
-        }
-      } catch {
-        // ignore missing or transient write/parse errors
-      }
-    }
-    const sig = sigParts.sort().join("|");
-    if (sig !== this.ompSubsSig) {
-      this.ompSubsSig = sig;
-      this.ompSubs = next;
-      this.ompMeta = nextMeta;
-    }
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -221,32 +165,6 @@ export default class Agents extends View {
         .child(div().flex_1().child(s.label))
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
   }
-  agentMenu(t, menu) {
-    const sessionId = menu?.sessionId;
-    return v_flex()
-      .w_full()
-      .p(5)
-      .bg(t.popover)
-      .text_size(12.8)
-      .child(
-        h_flex()
-          .id("copy-omp-session")
-          .h(31)
-          .px(8)
-          .gap(9)
-          .rounded(7)
-          .items_center()
-          .text_color(sessionId ? t.foreground : t.dim)
-          .when(Boolean(sessionId), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)))
-          .on_click((_e, cx) => {
-            if (!sessionId) return;
-            cx.write_to_clipboard(sessionId);
-            closeOverlay(props().overlay);
-          })
-          .child(svg("icons/omp.svg").size(14).flex_none().text_color(sessionId ? t.muted : t.dim))
-          .child(div().flex_1().truncate().child(sessionId ? "Copy OMP session ID" : "Session ID unavailable"))
-      );
-  }
 
   peek(addr) {
     run("terminal.peek", { terminal: addr });
@@ -289,94 +207,6 @@ export default class Agents extends View {
       .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
       .child(this.status(t, { status: st }, compact));
   }
-  ompSubRows(t, addr, compact) {
-    const subs = this.ompSubs?.get(addr) ?? [];
-    if (subs.length === 0) return [];
-    const expanded = this.ompExpanded.has(addr);
-    const visible = expanded ? subs : subs.slice(0, OMP_SUB_LIMIT);
-    const hasToggle = subs.length > OMP_SUB_LIMIT;
-    const hiddenCount = subs.length - visible.length;
-
-    const rows = visible.map((sub) => {
-      const st = sub.status === "error" ? "blocked" : sub.status;
-      return h_flex()
-        .id(`omp-sub-${addr}-${sub.id}`)
-        .pl(39)
-        .pr(8)
-        .rounded(8)
-        .h(26)
-        .flex_none()
-        .gap(0)
-        .items_center()
-        .text_size(12.5)
-        .cursor_pointer()
-        .hover((s) => s.bg(t.hover))
-        .on_click(() =>
-          openOverlay({
-            mod: "omp-peek",
-            kind: "dialog",
-            width: 560,
-            height: 420,
-            props: { terminal: addr, subagentId: sub.id },
-          })
-        )
-        .child(
-          div()
-            .self_start()
-            .mt(-4)
-            .w(9)
-            .h(17)
-            .mr(4)
-            .flex_none()
-            .border_l(1.5)
-            .border_b(1.5)
-            .rounded_bl(6)
-            .border_color(t.input)
-        )
-        .child(div().mr(7).child(svg("icons/omp.svg").size(13).flex_none().text_color(sub.status === "working" ? t.working : t.muted)))
-        .child(div().flex_1().truncate().text_color(sub.status === "working" ? t.foreground : t.muted).child(sub.name || sub.id))
-        .child(this.status(t, { status: st }, compact));
-    });
-
-    if (hasToggle) {
-      rows.push(
-        h_flex()
-          .id(`omp-sub-toggle-${addr}`)
-          .pl(39)
-          .pr(8)
-          .rounded(8)
-          .h(22)
-          .flex_none()
-          .gap(0)
-          .items_center()
-          .text_size(11.5)
-          .text_color(t.dim)
-          .cursor_pointer()
-          .hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_click((_e, cx) => {
-            if (expanded) this.ompExpanded.delete(addr);
-            else this.ompExpanded.add(addr);
-            cx.notify();
-          })
-          .child(
-            div()
-              .self_start()
-              .mt(-4)
-              .w(9)
-              .h(15)
-              .mr(4)
-              .flex_none()
-              .border_l(1.5)
-              .border_b(1.5)
-              .rounded_bl(6)
-              .border_color(t.input)
-          )
-          .child(expanded ? "Show less" : `+${hiddenCount} more`)
-      );
-    }
-
-    return rows;
-  }
 
   // compact: a ! for blocked where a header already says "Needs you".
   status(t, a, compact = false) {
@@ -392,14 +222,9 @@ export default class Agents extends View {
   render(cx) {
     const t = theme();
     if (props()?.sortMenu) return this.sortMenu(t);
-    if (props()?.agentMenu) return this.agentMenu(t, props().agentMenu);
     const collapsed = narrow();
     const sort = sortOf();
-    const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
-    let list = agents().filter((a) => {
-      const tab = tabs.get(a.tab);
-      return !(tab?.named && CUSTOMIZE_TAB_NAMES.has(tab.name));
-    });
+    let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const all = terminals();
     this.migratePins(all);
@@ -425,10 +250,9 @@ export default class Agents extends View {
 
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
-      const ompRows = collapsed ? [] : this.ompSubRows(t, a.address, byPriority);
       const r = row(a, i, subs);
       if (this.folded.has(a.address)) return [r];
-      return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority)), ...ompRows];
+      return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -462,6 +286,7 @@ export default class Agents extends View {
     // otherwise read the same.
     // Read the pane snapshot once: every host read copies the whole list into JS.
     const leads = leadPanes(panes());
+    const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
     const labels = new Map(list.map(a => {
       const tab = tabs.get(a.tab);
       const many = tabCounts.get(a.tab) > 1;
@@ -537,19 +362,6 @@ export default class Agents extends View {
           cx.notify();
         })
         .on_click(() => run("pane.focus", { pane: a.pane }))
-        .when(String(a.program?.key ?? "").toLowerCase() === "omp", (el) =>
-          el.on_mouse_down("right", (_e, cx) => {
-            cx.stop_propagation();
-            const sessionId = this.ompMeta?.get(a.address)?.sessionId ?? null;
-            openOverlay({
-              mod: "agents",
-              kind: "popup",
-              width: 220,
-              height: 44,
-              props: { agentMenu: { address: a.address, sessionId } },
-            });
-          })
-        )
         .when(Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
             cx.stop_propagation();

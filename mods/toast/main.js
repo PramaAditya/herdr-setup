@@ -12,9 +12,7 @@ export default class Toast extends View {
   render(cx) {
     const t = theme();
     const p = props() ?? {};
-    const rawBody = typeof p.body === "string" ? p.body : "";
-    const body = rawBody.replace(/^[^/\n]+\s*\/\s*(Customize (?:Herdr|OMP))$/, "$1");
-    const login = /^([a-z0-9][a-z0-9_.-]{0,31}) needs login; run hc machine login \1$/.exec(rawBody);
+    const login = /^([a-z0-9][a-z0-9_.-]{0,31}) needs login; run hc machine login \1$/.exec(p.body ?? "");
     const command = login ? `hc machine login ${login[1]}` : null;
     const text = (value) => p.fitHeight
       ? div().child(value)
@@ -39,7 +37,7 @@ export default class Toast extends View {
           .flex_1()
           .overflow_hidden()
           .child(text(login ? `${login[1]} needs a login: run` : p.title ?? "").font_semibold().text_size(13).text_color(t.foreground))
-          .when(!login && Boolean(body), (el) => el.child(text(body).text_size(12).text_color(t.muted)))
+          .when(!login && Boolean(p.body), (el) => el.child(text(p.body).text_size(12).text_color(t.muted)))
           .when(Boolean(login), (el) => el.child(h_flex().gap(8).items_center()
             .child(div().flex_1().min_w(0).truncate().tooltip(command).text_size(12).text_color(t.muted).child(command))
             .child(div().id("toast-login-copy").flex_none().px(6).py(3).rounded(4).bg(t.raised)
