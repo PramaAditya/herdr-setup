@@ -1,24 +1,23 @@
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { appHome, home, layout, panes, run, setShared, shared, spaces, terminals, theme } from "herdr";
+import { appHome, hc, home, layout, run, setShared, shared, terminals, theme } from "herdr";
 
-const CUSTOMIZE_SPACE = "__customize__";
 const TARGETS = [
   {
     id: "herdr",
     label: "Herdr",
-    tabName: "Customize Herdr",
     folder: () => appHome(),
     icon: () => image("frame/welcome/herdr.png").size(14).rounded(3),
   },
   {
     id: "omp",
     label: "OMP",
-    tabName: "Customize OMP",
     folder: () => `${home().replace(/[\\/]+$/, "")}/.omp`,
     icon: (t, active) => svg("icons/omp.svg").size(13).text_color(active ? t.foreground : t.muted),
   },
 ];
+
+const spawning = new Set();
 
 function findNode(node, id) {
   if (node?.id === id) return node;
@@ -47,77 +46,78 @@ function cloneWithTerminal(node, termAddr) {
   return node;
 }
 
-function normPath(p) {
-  return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+function findCustomizeTerminal(target) {
+  return (
+    terminals().find(
+      (t) =>
+        t.state === "live" &&
+        !String(t.address ?? "").includes("/") &&
+        t.labels?.["customize.target"] === target.id
+    ) ?? null
+  );
 }
 
-function findCustomizeSession(target) {
-  const targetDir = normPath(target.folder());
-  const allPanes = panes();
-  const termByAddr = new Map(terminals().map((t) => [t.address, t]));
-
-  for (const space of spaces()) {
-    if (space.machine) continue;
-    for (const tab of space.tabs) {
-      if (tab.named && tab.name === target.tabName) {
-        const pane = allPanes.find((p) => p.tab === tab.id && p.terminal);
-        if (pane?.terminal) return { space, tab, pane };
-      }
-      for (const pane of allPanes.filter((p) => p.tab === tab.id && p.terminal)) {
-        const term = termByAddr.get(pane.terminal);
-        const argv0 = String(term?.argv?.[0] ?? "").toLowerCase();
-        const isOmp =
-          argv0 === "omp" ||
-          argv0.endsWith("/omp") ||
-          argv0.endsWith("\\omp") ||
-          argv0.endsWith("omp.exe") ||
-          String(pane.program?.key ?? "").toLowerCase() === "omp" ||
-          String(pane.title ?? "").toLowerCase().includes("omp");
-        if (normPath(pane.cwd) === targetDir && isOmp) {
-          return { space, tab, pane };
-        }
-      }
-    }
-  }
-  return null;
+function mountDrawerTerminal(target, folder, addr) {
+  setShared("customize.drawer", { target: target.id, folder, terminal: addr });
+  run("layout.set", { layout: cloneWithTerminal(layout(), addr) });
+  run("layout.show", { id: "customize-drawer" });
+  run("pane.focus", { terminal: addr });
 }
 
 function switchDrawerTarget(target, cx) {
   const folder = target.folder();
-  const existing = findCustomizeSession(target);
-  if (existing?.pane?.terminal) {
-    const addr = existing.pane.terminal;
-    setShared("customize.drawer", { target: target.id, folder, terminal: addr });
-    const nextLayout = cloneWithTerminal(layout(), addr);
-    run("layout.set", { layout: nextLayout });
-    run("layout.show", { id: "customize-drawer" });
-    run("pane.focus", { terminal: addr });
+  const existing = findCustomizeTerminal(target);
+  if (existing?.address) {
+    mountDrawerTerminal(target, folder, existing.address);
     return;
   }
 
-  const customizeSpace = spaces().find((s) => !s.machine && s.name === CUSTOMIZE_SPACE);
-  if (customizeSpace) {
-    run("tab.new", { name: target.tabName, space: customizeSpace.id, folder, argv: ["omp"], focus: false });
-  } else {
-    run("space.new", { name: CUSTOMIZE_SPACE, tab: target.tabName, folder, argv: ["omp"], machine: "", focus: false });
+  if (spawning.has(target.id)) {
+    run("layout.show", { id: "customize-drawer" });
+    return;
   }
+
+  spawning.add(target.id);
   setShared("customize.drawer", { target: target.id, folder, terminal: "" });
   run("layout.show", { id: "customize-drawer" });
 
   cx.spawn(async (cx) => {
-    for (let i = 0; i < 30; i++) {
-      await cx.sleep(100);
-      const found = findCustomizeSession(target);
-      if (found?.pane?.terminal) {
-        const addr = found.pane.terminal;
-        setShared("customize.drawer", { target: target.id, folder, terminal: addr });
-        const nextLayout = cloneWithTerminal(layout(), addr);
-        run("layout.set", { layout: nextLayout });
-        run("layout.show", { id: "customize-drawer" });
-        run("pane.focus", { terminal: addr });
-        cx.notify();
-        return;
+    try {
+      const res = await hc([
+        "run",
+        "--bg",
+        "--keep",
+        "--no-parent",
+        "--json",
+        "--cwd",
+        folder,
+        "--label",
+        `customize.target=${target.id}`,
+        "--",
+        "omp",
+      ]);
+      let addr = null;
+      if (res.code === 0) {
+        try {
+          addr = JSON.parse(res.stdout)?.address ?? null;
+        } catch {}
       }
+      if (!addr) {
+        for (let i = 0; i < 30; i++) {
+          await cx.sleep(100);
+          const found = findCustomizeTerminal(target);
+          if (found?.address) {
+            addr = found.address;
+            break;
+          }
+        }
+      }
+      if (addr) {
+        mountDrawerTerminal(target, folder, addr);
+        cx.notify();
+      }
+    } finally {
+      spawning.delete(target.id);
     }
   });
 }

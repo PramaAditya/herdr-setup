@@ -1,83 +1,9 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { appHome, home, spaces, panes, focused, terminals, exec, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
-
-const CUSTOMIZE_SPACE = "__customize__";
-const CUSTOMIZE_TARGETS = [
-  {
-    id: "herdr",
-    tabName: "Customize Herdr",
-    spaceName: "Herdr",
-    tooltip: "Customize Herdr",
-    folder: () => appHome(),
-    icon: (t, active) => image("frame/welcome/herdr.png").size(15).rounded(3),
-  },
-  {
-    id: "omp",
-    tabName: "Customize OMP",
-    spaceName: "OMP",
-    tooltip: "Customize OMP (~/.omp)",
-    folder: () => `${home().replace(/[\\/]+$/, "")}/.omp`,
-    icon: (t, active) => svg("icons/omp.svg").size(14).text_color(active ? t.foreground : t.muted),
-  },
-];
-const CUSTOMIZE_TAB_NAMES = new Set(CUSTOMIZE_TARGETS.map((t) => t.tabName));
-const isCustomizeTab = (tab) => Boolean(tab.named && CUSTOMIZE_TAB_NAMES.has(tab.name));
+import { checking, nextCommand, spaces, panes, focused, exec, run, openOverlay, theme, window, shared, setShared, layout, settings } from "herdr";
 
 function normPath(p) {
   return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-
-function findCustomizeSession(target) {
-  const targetDir = normPath(target.folder());
-  const allPanes = panes();
-  const termByAddr = new Map(terminals().map((t) => [t.address, t]));
-
-  for (const space of spaces()) {
-    if (space.machine) continue;
-    for (const tab of space.tabs) {
-      if (tab.named && tab.name === target.tabName) {
-        const pane = allPanes.find((p) => p.tab === tab.id && p.terminal) ?? allPanes.find((p) => p.tab === tab.id);
-        return { space, tab, pane };
-      }
-      const tabPanes = allPanes.filter((p) => p.tab === tab.id && p.terminal);
-      for (const pane of tabPanes) {
-        const term = termByAddr.get(pane.terminal);
-        const argv0 = String(term?.argv?.[0] ?? "").toLowerCase();
-        const isOmp =
-          argv0 === "omp" ||
-          argv0.endsWith("/omp") ||
-          argv0.endsWith("\\omp") ||
-          argv0.endsWith("omp.exe") ||
-          String(pane.program?.key ?? "").toLowerCase() === "omp" ||
-          String(pane.title ?? "").toLowerCase().includes("omp");
-        if (normPath(pane.cwd) === targetDir && isOmp) {
-          return { space, tab, pane };
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function openOrFocusCustomize(target) {
-  const existing = findCustomizeSession(target);
-  if (existing) {
-    if (existing.tab.settled) run("tab.unsettle", { id: existing.tab.id });
-    run("space.select", { id: existing.space.id });
-    run("tab.select", { id: existing.tab.id });
-    if (existing.pane) run("pane.focus", { pane: existing.pane.pane });
-    return;
-  }
-
-  const customizeSpace = spaces().find((s) => !s.machine && s.name === CUSTOMIZE_SPACE);
-  const folder = target.folder();
-
-  if (customizeSpace) {
-    run("tab.new", { name: target.tabName, space: customizeSpace.id, folder, argv: ["omp"] });
-  } else {
-    run("space.new", { name: CUSTOMIZE_SPACE, tab: target.tabName, folder, argv: ["omp"], machine: "" });
-  }
 }
 
 function find(node, id) {
@@ -106,7 +32,7 @@ function label(tab, lead) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
     this.scroll = ScrollHandle.new();
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
@@ -114,6 +40,26 @@ export default class Tabs extends View {
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
     this.kanbanCache = new Map();
     this.kanbanPending = new Set();
+    if (cx && !checking()) {
+      cx.spawn(async () => {
+        for (;;) {
+          let cmd;
+          try { cmd = await nextCommand(); } catch { break; }
+          if (cmd === "toggle-todoist") {
+            const root = layout();
+            const panel = find(root, "panel");
+            const body = find(root, "panel-body");
+            if (panel && !panel.hidden && body?.active === "todoist") {
+              run("layout.hide", { id: "panel" });
+            } else {
+              run("layout.select", { stack: "panel-body", child: "todoist" });
+              run("layout.show", { id: "panel" });
+              setShared("todoist.focusQuickAdd", Date.now());
+            }
+          }
+        }
+      });
+    }
   }
 
   hasKanban(cwd, on, cx) {
@@ -196,9 +142,8 @@ export default class Tabs extends View {
     const t = theme();
     const space = spaces().find(p => p.active);
     const shown = space?.tabs ?? [];
-    const normalTabs = shown.filter(tab => !isCustomizeTab(tab));
-    const active = normalTabs.findIndex(tab => tab.active);
-    const selected = normalTabs[active]?.id;
+    const active = shown.findIndex(tab => tab.active);
+    const selected = shown[active]?.id;
     if (selected !== this.selected || active !== this.selectedIndex) {
       this.selected = selected;
       this.selectedIndex = active;
@@ -240,7 +185,7 @@ export default class Tabs extends View {
     let activeCwd = activePane?.cwd || f?.cwd || null;
     if (activeCwd) {
       this.lastCwd = { space: space?.id, cwd: activeCwd };
-    } else if (this.lastCwd?.space === space?.id) {
+    } else if (space?.id && this.lastCwd?.space === space.id) {
       activeCwd = this.lastCwd.cwd;
     } else {
       activeCwd = space?.folder || null;
@@ -268,7 +213,7 @@ export default class Tabs extends View {
       .on_scroll_wheel(e => this.wheel(e))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
-        .children(normalTabs.map((c, i) => item(c, i, true))))
+        .children(shown.map((c, i) => item(c, i, true))))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu-edited", kind: "popup", width: 250, height: 512 })))
       .when(showKanban, el => el.child(panelButton("kanban", "Kanban", "mods/workspace-chrome/layers.svg")))
       .child(panelButton("todoist", "Todoist", "mods/workspace-chrome/circle-check.svg"))

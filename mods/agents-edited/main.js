@@ -65,7 +65,6 @@ const SORTS = [
 ];
 const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[0];
 const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
-const CUSTOMIZE_TAB_NAMES = new Set(["Customize Herdr", "Customize OMP"]);
 const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 const OMP_SUBAGENTS_DIR = () => `${home().replace(/[\\/]+$/, "")}/.omp/run/herdr-subagents`;
 const OMP_SUB_LIMIT = 3;
@@ -396,10 +395,7 @@ export default class Agents extends View {
     const collapsed = narrow();
     const sort = sortOf();
     const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
-    let list = agents().filter((a) => {
-      const tab = tabs.get(a.tab);
-      return !(tab?.named && CUSTOMIZE_TAB_NAMES.has(tab.name));
-    });
+    let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const all = terminals();
     this.migratePins(all);
