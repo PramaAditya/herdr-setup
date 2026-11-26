@@ -363,7 +363,7 @@ export default class Files extends View {
   openMenu(parent, cx) {
     cx.stop_propagation();
     openOverlay({
-      mod: "files",
+      mod: "files-edited",
       kind: "popup",
       width: 190,
       height: parent ? 96 : 74,

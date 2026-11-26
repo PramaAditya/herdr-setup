@@ -542,7 +542,7 @@ export default class Agents extends View {
             cx.stop_propagation();
             const sessionId = this.ompMeta?.get(a.address)?.sessionId ?? null;
             openOverlay({
-              mod: "agents",
+              mod: "agents-edited",
               kind: "popup",
               width: 220,
               height: 44,
@@ -631,7 +631,7 @@ export default class Agents extends View {
                 .text_size(11)
                 .text_color(t.dim)
                 .hover((s) => s.text_color(t.foreground))
-                .on_click(() => openOverlay({ mod: "agents", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
+                .on_click(() => openOverlay({ mod: "agents-edited", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
                 .tooltip(`Sort agents: ${sort.label}`)
                 .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
             ),

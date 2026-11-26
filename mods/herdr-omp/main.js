@@ -176,7 +176,7 @@ export default class HerdrOmp extends View {
                 el.on_mouse_down("right", (_e, cx) => {
                   cx.stop_propagation();
                   openOverlay({
-                    mod: "menu",
+                    mod: "menu-edited",
                     kind: "popup",
                     width: 200,
                     props: { tab: "tab", target: { id: existing.tab.id, space: existing.space.id } },
