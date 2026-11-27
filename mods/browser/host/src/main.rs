@@ -933,6 +933,133 @@ fn render_artifact_html(file_path: &str, theme_hint: &str) -> (String, String) {
   }}
   .md-body th {{ background: var(--surface); font-weight: 600; }}
   .md-body img {{ max-width: 100%; border-radius: 6px; }}
+  .mermaid-wrap {{
+    position: relative;
+    margin: 14px 0;
+    padding: 36px 16px 16px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    overflow-x: auto;
+    text-align: center;
+  }}
+  .mermaid-wrap svg {{
+    max-width: 100%;
+    height: auto;
+  }}
+  .mermaid-expand-btn {{
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 5;
+    border: 1px solid var(--border);
+    background: var(--pill-bg);
+    color: var(--muted);
+    font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 5px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }}
+  .mermaid-expand-btn:hover {{
+    background: var(--pill-active);
+    color: var(--pill-active-fg);
+    border-color: var(--pill-active);
+  }}
+  .mm-modal {{
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }}
+  .mm-stage {{
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    cursor: grab;
+    user-select: none;
+    background-image: radial-gradient(var(--border) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }}
+  .mm-stage.dragging {{ cursor: grabbing; }}
+  .mm-canvas {{
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }}
+  .mm-canvas svg {{
+    display: block;
+    max-width: none !important;
+    height: auto;
+  }}
+  .mm-controls {{
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 210;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px;
+    border-radius: 999px;
+    background: var(--pill-bg);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+    backdrop-filter: blur(10px);
+  }}
+  .mm-controls button {{
+    border: 0;
+    background: transparent;
+    color: var(--fg);
+    font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 7px 11px;
+    border-radius: 999px;
+    cursor: pointer;
+  }}
+  .mm-controls button:hover {{
+    background: var(--code-bg);
+  }}
+  .mm-zoom-label {{
+    min-width: 48px;
+    text-align: center;
+    font: 600 11px/1 "JetBrains Mono", Consolas, monospace;
+    color: var(--muted);
+  }}
+  .mm-hint {{
+    position: fixed;
+    top: 12px;
+    left: 16px;
+    z-index: 210;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: var(--pill-bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+  }}
+  .mm-close-top {{
+    position: fixed;
+    top: 12px;
+    right: 16px;
+    z-index: 210;
+    border: 1px solid var(--border);
+    background: var(--pill-bg);
+    color: var(--fg);
+    font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 7px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+  }}
+  .mm-close-top:hover {{
+    background: var(--pill-active);
+    color: var(--pill-active-fg);
+  }}
   .raw-wrap {{
     padding: 14px 0;
     font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
@@ -1053,6 +1180,7 @@ function renderMarkdown(md) {{
   while (i < lines.length) {{
     const line = lines[i];
     if (/^```/.test(line.trim())) {{
+      const lang = line.trim().slice(3).trim().toLowerCase();
       const fence = [];
       i++;
       while (i < lines.length && !/^```/.test(lines[i].trim())) {{
@@ -1060,7 +1188,12 @@ function renderMarkdown(md) {{
         i++;
       }}
       i++;
-      html += '<pre><code>' + esc(fence.join('\n')) + '</code></pre>';
+      const codeText = fence.join('\n');
+      if (lang === 'mermaid') {{
+        html += '<div class="mermaid-wrap"><div class="mermaid">' + esc(codeText) + '</div></div>';
+      }} else {{
+        html += '<pre><code>' + esc(codeText) + '</code></pre>';
+      }}
       continue;
     }}
     if (/^\s*([-*_])\1{{2,}}\s*$/.test(line)) {{
@@ -1172,6 +1305,216 @@ const root = document.getElementById('view-root');
 const bar = document.getElementById('floating-bar');
 let state = {{ view: DATA.mode === 'text' ? 'raw' : 'preview', wrap: true }};
 
+let mermaidPromise = null;
+function loadMermaid() {{
+  if (window.mermaid) return Promise.resolve(window.mermaid);
+  if (mermaidPromise) return mermaidPromise;
+  const urls = [
+    'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
+    'https://unpkg.com/mermaid@11/dist/mermaid.min.js'
+  ];
+  mermaidPromise = new Promise((resolve, reject) => {{
+    let idx = 0;
+    const tryNext = () => {{
+      if (idx >= urls.length) return reject(new Error('mermaid load failed'));
+      const s = document.createElement('script');
+      s.src = urls[idx++];
+      s.onload = () => resolve(window.mermaid);
+      s.onerror = tryNext;
+      document.head.appendChild(s);
+    }};
+    tryNext();
+  }});
+  return mermaidPromise;
+}}
+
+function openMermaidFullscreen(svgEl) {{
+  if (!svgEl) return;
+  const modal = document.createElement('div');
+  modal.className = 'mm-modal';
+
+  const hint = document.createElement('div');
+  hint.className = 'mm-hint';
+  hint.textContent = 'Scroll to zoom · Drag to pan · Double-click to reset · Esc to close';
+
+  const closeTop = document.createElement('button');
+  closeTop.className = 'mm-close-top';
+  closeTop.textContent = '✕ Close';
+
+  const stage = document.createElement('div');
+  stage.className = 'mm-stage';
+
+  const canvas = document.createElement('div');
+  canvas.className = 'mm-canvas';
+  const clone = svgEl.cloneNode(true);
+  clone.removeAttribute('style');
+  const vb = clone.getAttribute('viewBox');
+  let baseW = svgEl.getBoundingClientRect().width || 800;
+  let baseH = svgEl.getBoundingClientRect().height || 500;
+  if (vb) {{
+    const p = vb.split(/[\s,]+/).map(Number);
+    if (p.length === 4 && p[2] > 0 && p[3] > 0) {{
+      baseW = p[2];
+      baseH = p[3];
+      clone.setAttribute('width', String(baseW));
+      clone.setAttribute('height', String(baseH));
+    }}
+  }}
+  canvas.appendChild(clone);
+  stage.appendChild(canvas);
+
+  const controls = document.createElement('div');
+  controls.className = 'mm-controls';
+  const zoomLabel = document.createElement('span');
+  zoomLabel.className = 'mm-zoom-label';
+
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+
+  function applyTransform() {{
+    canvas.style.transform = `translate(${{tx}}px, ${{ty}}px) scale(${{scale}})`;
+    zoomLabel.textContent = `${{Math.round(scale * 100)}}%`;
+  }}
+
+  function fitToStage() {{
+    const r = stage.getBoundingClientRect();
+    const pad = 48;
+    const sx = (r.width - pad * 2) / Math.max(baseW, 1);
+    const sy = (r.height - pad * 2) / Math.max(baseH, 1);
+    scale = Math.min(Math.max(Math.min(sx, sy), 0.15), 2.5);
+    tx = (r.width - baseW * scale) / 2;
+    ty = (r.height - baseH * scale) / 2;
+    applyTransform();
+  }}
+
+  function zoomAt(factor, cx, cy) {{
+    const next = Math.min(Math.max(scale * factor, 0.1), 12);
+    const ratio = next / scale;
+    tx = cx - (cx - tx) * ratio;
+    ty = cy - (cy - ty) * ratio;
+    scale = next;
+    applyTransform();
+  }}
+
+  const mkCtrl = (label, fn) => {{
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = fn;
+    return b;
+  }};
+
+  controls.appendChild(mkCtrl('−', () => {{
+    const r = stage.getBoundingClientRect();
+    zoomAt(0.8, r.width / 2, r.height / 2);
+  }}));
+  controls.appendChild(zoomLabel);
+  controls.appendChild(mkCtrl('+', () => {{
+    const r = stage.getBoundingClientRect();
+    zoomAt(1.25, r.width / 2, r.height / 2);
+  }}));
+  controls.appendChild(mkCtrl('Fit', fitToStage));
+  controls.appendChild(mkCtrl('100%', () => {{
+    const r = stage.getBoundingClientRect();
+    scale = 1;
+    tx = (r.width - baseW) / 2;
+    ty = (r.height - baseH) / 2;
+    applyTransform();
+  }}));
+
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let startTx = 0;
+  let startTy = 0;
+
+  stage.addEventListener('pointerdown', (e) => {{
+    if (e.button !== 0) return;
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startTx = tx;
+    startTy = ty;
+    stage.classList.add('dragging');
+    stage.setPointerCapture(e.pointerId);
+  }});
+  stage.addEventListener('pointermove', (e) => {{
+    if (!dragging) return;
+    tx = startTx + (e.clientX - startX);
+    ty = startTy + (e.clientY - startY);
+    applyTransform();
+  }});
+  const endDrag = () => {{
+    dragging = false;
+    stage.classList.remove('dragging');
+  }};
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  stage.addEventListener('wheel', (e) => {{
+    e.preventDefault();
+    const r = stage.getBoundingClientRect();
+    const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top;
+    const factor = e.deltaY < 0 ? 1.14 : 1 / 1.14;
+    zoomAt(factor, cx, cy);
+  }}, {{ passive: false }});
+
+  stage.addEventListener('dblclick', fitToStage);
+
+  const close = () => {{
+    window.removeEventListener('keydown', onKey);
+    modal.remove();
+  }};
+  const onKey = (e) => {{
+    if (e.key === 'Escape') close();
+    else if (e.key === '+' || e.key === '=') {{
+      const r = stage.getBoundingClientRect();
+      zoomAt(1.2, r.width / 2, r.height / 2);
+    }} else if (e.key === '-') {{
+      const r = stage.getBoundingClientRect();
+      zoomAt(0.83, r.width / 2, r.height / 2);
+    }} else if (e.key === '0') {{
+      fitToStage();
+    }}
+  }};
+  closeTop.onclick = close;
+  window.addEventListener('keydown', onKey);
+
+  modal.appendChild(stage);
+  modal.appendChild(hint);
+  modal.appendChild(closeTop);
+  modal.appendChild(controls);
+  document.body.appendChild(modal);
+  requestAnimationFrame(fitToStage);
+}}
+
+function renderMermaidDiagrams() {{
+  const nodes = root.querySelectorAll('.mermaid');
+  if (!nodes.length) return;
+  loadMermaid().then((m) => {{
+    if (!m) return;
+    m.initialize({{
+      startOnLoad: false,
+      theme: theme === 'dark' ? 'dark' : 'default',
+      securityLevel: 'strict',
+      flowchart: {{ htmlLabels: true, curve: 'basis' }}
+    }});
+    m.run({{ nodes }}).then(() => {{
+      root.querySelectorAll('.mermaid-wrap').forEach((wrap) => {{
+        if (wrap.querySelector('.mermaid-expand-btn')) return;
+        const svgEl = wrap.querySelector('svg');
+        if (!svgEl) return;
+        const btn = document.createElement('button');
+        btn.className = 'mermaid-expand-btn';
+        btn.textContent = '⤢ Fullscreen';
+        btn.onclick = () => openMermaidFullscreen(svgEl);
+        wrap.appendChild(btn);
+      }});
+    }}).catch(() => {{}});
+  }}).catch(() => {{}});
+}}
+
 function draw() {{
   root.innerHTML = '';
   bar.innerHTML = '';
@@ -1182,6 +1525,7 @@ function draw() {{
       d.className = 'md-body';
       d.innerHTML = renderMarkdown(DATA.content);
       root.appendChild(d);
+      renderMermaidDiagrams();
     }} else {{
       root.appendChild(renderRaw(DATA.content, state.wrap));
     }}
