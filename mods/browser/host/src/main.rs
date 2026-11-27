@@ -69,6 +69,7 @@ struct StatusResp {
     title: String,
     tabs: Vec<TabMeta>,
     visible: bool,
+    wide_fullscreen: bool,
     herdr_hwnd: isize,
     dpi: u32,
     new_ports: Vec<u16>,
@@ -94,7 +95,10 @@ enum HostCmd {
     DevTools,
     Bounds(BoundsReq),
     Ping,
-    Fullscreen(bool),
+    Fullscreen {
+        mode: String,
+        active: bool,
+    },
     Quit,
 }
 
@@ -102,6 +106,7 @@ struct SharedState {
     tabs: Vec<TabMeta>,
     active_tab: String,
     visible: bool,
+    wide_fullscreen: bool,
     herdr_hwnd: isize,
     new_ports: Vec<u16>,
     active_ports: Vec<u16>,
@@ -124,7 +129,8 @@ struct AppContext {
     last_applied_rect: Option<(i32, i32, i32, i32)>,
     last_visible_ping: Instant,
     currently_shown: bool,
-    fullscreen: bool,
+    wide_fullscreen: bool,
+    modal_fullscreen: bool,
 }
 
 struct HwndWrapper(HWND);
@@ -597,9 +603,13 @@ fn apply_bounds(app: &mut AppContext, force: bool) {
         let ping_expired = app.last_visible_ping.elapsed() > Duration::from_millis(650);
 
         if !b.visible || b.width < 10.0 || b.height < 10.0 || herdr_hidden || ping_expired {
-            app.fullscreen = false;
+            app.modal_fullscreen = false;
+            app.wide_fullscreen = false;
             hide_container(app);
-            app.state.lock().unwrap().visible = false;
+            if let Ok(mut st) = app.state.lock() {
+                st.visible = false;
+                st.wide_fullscreen = false;
+            }
             return;
         }
 
@@ -615,13 +625,25 @@ fn apply_bounds(app: &mut AppContext, force: bool) {
         let mut origin = POINT { x: 0, y: 0 };
         ClientToScreen(herdr, &mut origin);
 
-        let (sx, sy, pw, ph) = if app.fullscreen {
+        let local_y = if let Some(y) = b.y {
+            (y * dpi_scale).round() as i32
+        } else if let Some(tm) = b.top_margin {
+            (tm * dpi_scale * zoom).round() as i32
+        } else {
+            (119.0 * dpi_scale * zoom).round() as i32
+        };
+
+        let (sx, sy, pw, ph) = if app.modal_fullscreen {
             (
                 origin.x,
                 origin.y,
                 client_w.round().max(100.0) as i32,
                 client_h.round().max(100.0) as i32,
             )
+        } else if app.wide_fullscreen {
+            let top = (42.0 * dpi_scale * zoom).round() as i32;
+            let h = (client_h.round() as i32 - top).max(100);
+            (origin.x, origin.y + top, client_w.round().max(100.0) as i32, h)
         } else {
             let pw = (b.width * dpi_scale).round().max(1.0) as i32;
             let ph = (b.height * dpi_scale).round().max(1.0) as i32;
@@ -636,14 +658,6 @@ fn apply_bounds(app: &mut AppContext, force: bool) {
                 (client_w - (pw as f64) - (9.0 * dpi_scale * zoom))
                     .round()
                     .max(0.0) as i32
-            };
-
-            let local_y = if let Some(y) = b.y {
-                (y * dpi_scale).round() as i32
-            } else if let Some(tm) = b.top_margin {
-                (tm * dpi_scale * zoom).round() as i32
-            } else {
-                (119.0 * dpi_scale * zoom).round() as i32
             };
 
             (origin.x + local_x, origin.y + local_y, pw, ph)
@@ -726,15 +740,15 @@ fn process_commands(app: &mut AppContext) {
                 }
             }
             HostCmd::SelectTab(id) => {
-                if app.fullscreen {
-                    app.fullscreen = false;
+                if app.modal_fullscreen {
+                    app.modal_fullscreen = false;
                     apply_bounds(app, true);
                 }
                 select_tab(app, &id);
             }
             HostCmd::CloseTab(id) => {
-                if app.fullscreen {
-                    app.fullscreen = false;
+                if app.modal_fullscreen {
+                    app.modal_fullscreen = false;
                     apply_bounds(app, true);
                 }
                 close_tab(app, &id);
@@ -787,9 +801,16 @@ fn process_commands(app: &mut AppContext) {
                     apply_bounds(app, true);
                 }
             }
-            HostCmd::Fullscreen(active) => {
+            HostCmd::Fullscreen { mode, active } => {
                 app.last_visible_ping = Instant::now();
-                app.fullscreen = active;
+                if mode == "wide" {
+                    app.wide_fullscreen = active;
+                    if let Ok(mut st) = app.state.lock() {
+                        st.wide_fullscreen = active;
+                    }
+                } else {
+                    app.modal_fullscreen = active;
+                }
                 apply_bounds(app, true);
             }
             HostCmd::Quit => unsafe {
@@ -1996,12 +2017,22 @@ async function renderPptxView() {{
 }}
 
 window.addEventListener('keydown', (e) => {{
+  if (e.key === 'Escape' && !document.querySelector('.mm-modal')) {{
+    if (DATA.mode === 'pptx' && pptxFullscreen) {{
+      pptxFullscreen = false;
+      setHostFullscreen(false);
+      renderPptxView();
+      return;
+    }}
+    fetch('/fullscreen', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ mode: 'wide', active: false }})
+    }}).catch(() => {{}});
+    return;
+  }}
   if (DATA.mode !== 'pptx') return;
-  if (e.key === 'Escape' && pptxFullscreen) {{
-    pptxFullscreen = false;
-    setHostFullscreen(false);
-    renderPptxView();
-  }} else if (pptxMode === 'deck' && e.key === 'ArrowRight' && cachedSlides && pptxIdx < cachedSlides.length - 1) {{
+  if (pptxMode === 'deck' && e.key === 'ArrowRight' && cachedSlides && pptxIdx < cachedSlides.length - 1) {{
     pptxIdx++;
     renderPptxView();
   }} else if (pptxMode === 'deck' && e.key === 'ArrowLeft' && pptxIdx > 0) {{
@@ -2456,6 +2487,7 @@ fn handle_http(
                 title: active.map(|t| t.title.clone()).unwrap_or_default(),
                 tabs: st.tabs.clone(),
                 visible: st.visible,
+                wide_fullscreen: st.wide_fullscreen,
                 herdr_hwnd: st.herdr_hwnd,
                 dpi,
                 new_ports: st.new_ports.clone(),
@@ -2571,6 +2603,7 @@ fn handle_http(
         ("POST", "/fullscreen") => {
             #[derive(Deserialize)]
             struct FsReq {
+                mode: Option<String>,
                 active: bool,
             }
             if let Ok(r) = serde_json::from_str::<FsReq>(body) {
@@ -2578,7 +2611,10 @@ fn handle_http(
                     .lock()
                     .unwrap()
                     .queue
-                    .push_back(HostCmd::Fullscreen(r.active));
+                    .push_back(HostCmd::Fullscreen {
+                        mode: r.mode.unwrap_or_else(|| "modal".into()),
+                        active: r.active,
+                    });
                 unsafe {
                     PostMessageW(container_hwnd as HWND, WM_RUN_CMD, 0, 0);
                 }
@@ -2742,6 +2778,7 @@ fn main() {
         tabs: Vec::new(),
         active_tab: String::new(),
         visible: false,
+        wide_fullscreen: false,
         herdr_hwnd: herdr_hwnd as isize,
         new_ports: Vec::new(),
         active_ports: Vec::new(),
@@ -2759,7 +2796,8 @@ fn main() {
         last_applied_rect: None,
         last_visible_ping: Instant::now(),
         currently_shown: false,
-        fullscreen: false,
+        wide_fullscreen: false,
+        modal_fullscreen: false,
     });
 
     if let Some(first_id) = create_tab(&mut app, None, &initial_url) {

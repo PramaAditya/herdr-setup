@@ -176,7 +176,10 @@ export default class ArtifactViewer extends View {
     this.lastSentBoundsKey = "";
     this.lastNavTs = Number(shared("browser.navigate")?.ts || 0);
     this.lastFocusUrlTs = Number(shared("browser.focusUrl") || 0);
+    this.lastExitWideTs = Number(shared("browser.exitWideFullscreen") || 0);
     this.autoLocalhost = shared("browser.autoLocalhost") !== false;
+    this.wideFullscreen = false;
+    if (!checking()) setShared("browser.wideFullscreen", false);
     this.seenAutoPorts = new Set();
     this._starting = false;
 
@@ -242,6 +245,7 @@ export default class ArtifactViewer extends View {
   }
 
   async close() {
+    setShared("browser.wideFullscreen", false);
     if (this.port) {
       await this.post("/bounds", { visible: false, width: 0, height: 0 }).catch(() => {});
     }
@@ -304,6 +308,11 @@ export default class ArtifactViewer extends View {
     }
     if (st.active_tab && st.active_tab !== this.activeTab) {
       this.activeTab = st.active_tab;
+      changed = true;
+    }
+    if (typeof st.wide_fullscreen === "boolean" && st.wide_fullscreen !== this.wideFullscreen) {
+      this.wideFullscreen = st.wide_fullscreen;
+      setShared("browser.wideFullscreen", this.wideFullscreen);
       changed = true;
     }
     const url = st.url || "";
@@ -505,6 +514,35 @@ export default class ArtifactViewer extends View {
     cx.notify();
   }
 
+  async toggleWideFullscreen(cx) {
+    if (!this.port) return;
+    const next = !this.wideFullscreen;
+    this.wideFullscreen = next;
+    setShared("browser.wideFullscreen", next);
+    await this.post("/fullscreen", { mode: "wide", active: next });
+    cx.notify();
+  }
+
+  async openExternal(cx) {
+    const url = this.currentUrl || "";
+    if (!url || url === "about:blank") return;
+    const localPath = extractViewPath(url) || fileUrlToPath(url);
+    if (localPath) {
+      const escaped = localPath.replace(/'/g, "''");
+      await exec("powershell", [
+        "-NoProfile",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        `Start-Process -LiteralPath '${escaped}'`,
+      ]).catch(() => {});
+      return;
+    }
+    if (/^https?:\/\//i.test(url)) {
+      cx.open_url(url);
+    }
+  }
+
   renderTabBar(t, cx) {
     const stop = (_e, cx) => cx.stop_propagation();
     const tabs = this.tabs.length > 0 ? this.tabs : [{ id: "tab-1", url: this.currentUrl, title: "" }];
@@ -619,6 +657,16 @@ export default class ArtifactViewer extends View {
         .when(!disabled, (el) => el.on_click(onClick))
         .child(label);
 
+    const cur = this.currentUrl || "";
+    const localPath = extractViewPath(cur) || fileUrlToPath(cur);
+    const isWebPage = Boolean(
+      cur &&
+        cur !== "about:blank" &&
+        ((/^https?:\/\//i.test(cur) && !extractViewPath(cur)) || /\.html?([?#].*)?$/i.test(localPath || ""))
+    );
+    const canOpenExternal = Boolean(cur && cur !== "about:blank" && (localPath || /^https?:\/\//i.test(cur)));
+    const extLabel = localPath ? "Open ↗" : "Browser ↗";
+
     return h_flex()
       .w_full()
       .h(36)
@@ -679,17 +727,33 @@ export default class ArtifactViewer extends View {
           )
           .child("Auto")
       )
-      .child(iconBtn("br-devtools", "DevTools", () => cx.spawn(() => this.post("/devtools")), !ready))
+      .when(isWebPage, (el) =>
+        el.child(iconBtn("br-devtools", "DevTools", () => cx.spawn(() => this.post("/devtools")), !ready))
+      )
+      .child(
+        div()
+          .id("br-wide-fs")
+          .h(26)
+          .px(7)
+          .flex_none()
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(6)
+          .text_size(12)
+          .bg(this.wideFullscreen ? t.selected : t.chrome)
+          .text_color(!ready ? t.dim : this.wideFullscreen ? t.foreground : t.muted)
+          .when(ready, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
+          .on_mouse_down("left", stop)
+          .when(ready, (el) => el.on_click((_e, cx) => cx.spawn((cx) => this.toggleWideFullscreen(cx))))
+          .child(this.wideFullscreen ? "⤡" : "⤢")
+      )
       .child(
         iconBtn(
           "br-ext",
-          "↗",
-          (_e, cx) => {
-            if (this.currentUrl && /^https?:\/\//i.test(this.currentUrl)) {
-              cx.open_url(this.currentUrl);
-            }
-          },
-          !this.currentUrl || !/^https?:\/\//i.test(this.currentUrl)
+          extLabel,
+          (_e, cx) => cx.spawn((cx) => this.openExternal(cx)),
+          !canOpenExternal
         )
       );
   }
@@ -711,6 +775,18 @@ export default class ArtifactViewer extends View {
     if (focusReq > this.lastFocusUrlTs) {
       this.lastFocusUrlTs = focusReq;
       this.urlInput.focus?.();
+    }
+
+    const exitWideReq = Number(shared("browser.exitWideFullscreen") || 0);
+    if (exitWideReq > this.lastExitWideTs) {
+      this.lastExitWideTs = exitWideReq;
+      if (!checking() && this.wideFullscreen) {
+        this.wideFullscreen = false;
+        setShared("browser.wideFullscreen", false);
+        cx.spawn(async () => {
+          await this.post("/fullscreen", { mode: "wide", active: false });
+        });
+      }
     }
 
     return v_flex()
