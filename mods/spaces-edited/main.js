@@ -25,6 +25,49 @@ function place(s, ps) {
   const tabs = new Set((s.tabs ?? []).map((c) => c.id));
   return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
 }
+function normPath(p) {
+  return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+function pinKeyOf(machine, folder, fallbackId) {
+  const norm = normPath(folder);
+  return norm ? `${machine ?? ""}\0${norm}` : `id:${fallbackId}`;
+}
+function readPinned() {
+  const raw = shared("spaces.pinned");
+  return Array.isArray(raw) ? raw.filter((p) => p && typeof p === "object" && typeof p.key === "string") : [];
+}
+function matchPinned(pins, rows, ps) {
+  const usedSpaces = new Set();
+  const byPin = new Map();
+  // First pass: exact match by lastId while the space is still live.
+  for (const pin of pins) {
+    if (!pin.lastId) continue;
+    const r = rows.find((x) => !usedSpaces.has(x.w.id) && x.w.id === pin.lastId);
+    if (r) {
+      usedSpaces.add(r.w.id);
+      byPin.set(pin.key, r);
+    }
+  }
+  // Second pass: match by machine + normalized folder (handles reopened pinned spaces).
+  for (const pin of pins) {
+    if (byPin.has(pin.key)) continue;
+    const pNorm = normPath(pin.folder);
+    const pMachine = pin.machine ?? null;
+    const r = rows.find((x) => {
+      if (usedSpaces.has(x.w.id)) return false;
+      if ((x.w.machine ?? null) !== pMachine) return false;
+      if (pNorm) {
+        return normPath(place(x.w, ps)) === pNorm || normPath(x.w.folder) === pNorm;
+      }
+      return !normPath(x.w.folder) && x.w.name === pin.name;
+    });
+    if (r) {
+      usedSpaces.add(r.w.id);
+      byPin.set(pin.key, r);
+    }
+  }
+  return { byPin, usedSpaces };
+}
 const rowHeight = ({ tree }) => (tree ? 28 : 30);
 const RAIL_CELL = 32;
 // A space's name and its git tail never shrink below this, so a short one ("api")
@@ -93,6 +136,9 @@ export default class Spaces extends View {
     this.born = {};
     this.pressed = null;
     this.over = null;
+    this.pinPressed = null;
+    this.pinOver = null;
+    this.hovered = null;
     this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
     this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.machines = [];
@@ -302,7 +348,96 @@ export default class Spaces extends View {
 
   menu(w) {
     // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "menu-edited", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+    openOverlay({ mod: "menu-edited", kind: "popup", width: 200, height: 280, props: { tab: "space", target: { id: w.id } } });
+  }
+
+  pinnedMenu(pin) {
+    openOverlay({ mod: "menu-edited", kind: "popup", width: 200, height: 120, props: { tab: "pinned-space", target: { key: pin.key } } });
+  }
+
+  pinSpace(w, cx) {
+    const ps = panes();
+    const folder = place(w, ps);
+    const machine = w.machine ?? null;
+    const key = pinKeyOf(machine, folder, w.id);
+    const colors = shared("space.colors") ?? {};
+    const color = colors[w.id] ?? "ansi6";
+    const pins = readPinned();
+    const exists = pins.some((p) => p.key === key || (p.lastId && p.lastId === w.id));
+    if (!exists) {
+      setShared("spaces.pinned", [...pins, { key, name: w.name, named: Boolean(w.named), folder, machine, color, lastId: w.id }]);
+    }
+    this.hovered = null;
+    cx?.notify();
+  }
+
+  unpinSpace(key, cx) {
+    const pins = readPinned();
+    const next = pins.filter((p) => p.key !== key);
+    if (next.length !== pins.length) setShared("spaces.pinned", next);
+    this.hovered = null;
+    cx?.notify();
+  }
+
+  openPinned(pin) {
+    const args = { machine: pin.machine ?? "" };
+    if (pin.folder) args.folder = pin.folder;
+    if (pin.named && pin.name) args.name = pin.name;
+    run("space.new", args);
+  }
+
+  reorderPinned(fromKey, toKey) {
+    const pins = readPinned();
+    const fromIdx = pins.findIndex((p) => p.key === fromKey);
+    const toIdx = pins.findIndex((p) => p.key === toKey);
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+    const next = [...pins];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    setShared("spaces.pinned", next);
+  }
+
+  syncPinned(pins, byPin) {
+    let pinsChanged = false;
+    const colors = { ...(shared("space.colors") ?? {}) };
+    let colorsChanged = false;
+    const nextPins = pins.map((pin) => {
+      const matched = byPin.get(pin.key);
+      if (!matched) return pin;
+      const w = matched.w;
+      if (pin.color && colors[w.id] !== pin.color) {
+        colors[w.id] = pin.color;
+        colorsChanged = true;
+      }
+      const nextName = w.name || pin.name;
+      const nextNamed = Boolean(w.named);
+      if (pin.lastId !== w.id || pin.name !== nextName || pin.named !== nextNamed) {
+        pinsChanged = true;
+        return { ...pin, lastId: w.id, name: nextName, named: nextNamed };
+      }
+      return pin;
+    });
+    if (colorsChanged) setShared("space.colors", colors);
+    if (pinsChanged) setShared("spaces.pinned", nextPins);
+  }
+
+  pinButton(id, isPinned, onToggle, t) {
+    return div()
+      .id(`pin-space-${id}`)
+      .flex_none()
+      .p(2)
+      .rounded(4)
+      .text_color(t.dim)
+      .cursor_pointer()
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .tooltip(isPinned ? "Unpin space" : "Pin space")
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_mouse_up("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        onToggle(cx);
+      })
+      .child(svg(`mods/workspace-chrome/${isPinned ? "pin-off" : "pin"}.svg`).size(13));
   }
 
   orderingDue(now) {
@@ -352,26 +487,49 @@ export default class Spaces extends View {
 
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
-    const rows = this.ordered();
+    const allRows = this.ordered();
+    const ps = panes();
+    const pins = readPinned();
+    const { byPin, usedSpaces } = matchPinned(pins, allRows, ps);
+    if (pins.length) this.syncPinned(pins, byPin);
+
+    const pinnedList = pins.map((pin, idx) =>
+      collapsed ? this.pinnedCompact(pin, byPin.get(pin.key) ?? null, idx, t) : this.pinnedRow(pin, byPin.get(pin.key) ?? null, idx, t),
+    );
+    const rows = allRows.filter((r) => !usedSpaces.has(r.w.id));
     const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t));
     // Where the active space's row lands among the children this returns: the list scrolls by its direct
     // children, and machine headers, login notes and loading rows count too.
     this.activeAt = -1;
-    let before = 0;
-    const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
+    const pinnedActiveIdx = pins.findIndex((pin) => byPin.get(pin.key)?.w?.active);
+    if (pinnedActiveIdx >= 0) this.activeAt = pinnedActiveIdx;
+
+    const remote = [...new Set([...allRows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
       return layout === "loading" || (!layout && this.machines.some(k => k.name === m && k.state === "connected"))
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
+
+    let regular = [];
     if (!remote.length) {
-      if (loading(null) && !rows.length) return [loadingRow(null)];
-      this.activeAt = rows.findIndex(r => r.w.active);
-      return rows.map(draw);
+      if (loading(null) && !allRows.length) regular = [loadingRow(null)];
+      else regular = rows.map(draw);
+    }
+    const hasDivider = pinnedList.length > 0 && (remote.length > 0 || regular.length > 0);
+    const divider = div().id("pinned-spaces-divider").mx(collapsed ? 6 : 8).my(5).h(1).flex_none().bg(t.border);
+    let before = pinnedList.length + (hasDivider ? 1 : 0);
+
+    if (!remote.length) {
+      if (this.activeAt === -1) {
+        const regActive = rows.findIndex(r => r.w.active);
+        if (regActive >= 0) this.activeAt = before + regActive;
+      }
+      return [...pinnedList, ...(hasDivider ? [divider] : []), ...regular];
     }
     const machineNames = [null, ...remote];
-    return machineNames.flatMap((m) => {
+    const remoteItems = machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
       const repair = this.reconnecting[m];
       const machine = this.machines.find(k => k.name === m) ?? repair?.machine;
@@ -427,10 +585,11 @@ export default class Spaces extends View {
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
       const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? mine.map(draw) : [loading(m) ? loadingRow(m) : cell(empty)])];
       const first = folded ? -1 : mine.findIndex(r => r.w.active);
-      if (first >= 0) this.activeAt = before + 1 + guidance.length + first;
+      if (this.activeAt === -1 && first >= 0) this.activeAt = before + 1 + guidance.length + first;
       before += items.length;
       return items;
     });
+    return [...pinnedList, ...(hasDivider ? [divider] : []), ...remoteItems];
   }
 
   // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
@@ -462,12 +621,124 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
+  pinnedRow(pin, matched, pinIdx, t) {
+    const w = matched?.w ?? null;
+    const g = matched?.g ?? null;
+    const on = Boolean(w?.active);
+    const live = Boolean(w);
+    const pins = readPinned();
+    const fromIdx = this.pinPressed === null ? -1 : pins.findIndex((p) => p.key === this.pinPressed);
+    const colors = shared("space.colors") ?? {};
+    const color = (w ? colors[w.id] : null) ?? pin.color ?? "ansi6";
+    const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
+    const name = w?.name ?? pin.name;
+    const hoverKey = `pin:${pin.key}`;
+    const isHovered = this.hovered === hoverKey;
+    return v_flex()
+      .relative()
+      .id(`pinned-space-${pinIdx}`)
+      .px(8)
+      .h(rowHeight({ tree: null }))
+      .flex_none()
+      .justify_center()
+      .rounded(8)
+      .cursor_pointer()
+      .when(on, (el) => el.bg(t.selected))
+      .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(this.pinPressed === pin.key && this.pinOver !== pin.key, (el) => el.opacity(0.5))
+      .when(this.pinPressed !== null && this.pinOver === pin.key && this.pinPressed !== pin.key, (el) => el.child(
+        div().absolute().left(0).right(0).h(2).bg(t.accent)
+          .when(fromIdx < pinIdx, line => line.bottom(0))
+          .when(fromIdx > pinIdx, line => line.top(0)),
+      ))
+      .on_hover((over, cx) => {
+        if (over) this.hovered = hoverKey;
+        else if (this.hovered === hoverKey) this.hovered = null;
+        cx.notify();
+      })
+      .on_mouse_down("left", () => {
+        this.pinPressed = pin.key;
+        this.pinOver = pin.key;
+      })
+      .on_mouse_move((_e, cx) => {
+        if (this.pinPressed !== null && this.pinOver !== pin.key) {
+          this.pinOver = pin.key;
+          cx.notify();
+        }
+      })
+      .on_mouse_up("left", (_e, cx) => {
+        const from = this.pinPressed;
+        const over = this.pinOver;
+        this.pinPressed = null;
+        this.pinOver = null;
+        if (from !== null && over === pin.key && from !== pin.key) {
+          this.reorderPinned(from, pin.key);
+        } else if (from === pin.key) {
+          if (w) run("space.select", { id: w.id });
+          else this.openPinned(pin);
+        }
+        cx.notify();
+      })
+      .on_mouse_down("right", () => (w ? this.menu(w) : this.pinnedMenu(pin)))
+      .child(
+        h_flex()
+          .gap(9)
+          .items_center()
+          .child(
+            h_flex()
+              .size(18)
+              .flex_none()
+              .rounded(5)
+              .bg(fill)
+              .when(!live, (el) => el.opacity(0.45))
+              .items_center()
+              .justify_center()
+              .text_size(10.5)
+              .font_bold()
+              .text_color("#ffffff")
+              .child(spaceAvatar(name)),
+          )
+          .child(
+            div()
+              .flex_initial()
+              .min_w(SIDE_MIN)
+              .truncate()
+              .text_color(live ? t.foreground : t.muted)
+              .child(name),
+          )
+          .child(g ? this.gitTail(g, null, name, t) : div().flex_1())
+          .when(isHovered, (el) => el.child(this.pinButton(`p-${pinIdx}`, true, (cx) => this.unpinSpace(pin.key, cx), t))),
+      );
+  }
+
+  pinnedCompact(pin, matched, pinIdx, t) {
+    const w = matched?.w ?? null;
+    const on = Boolean(w?.active);
+    const name = w?.name ?? pin.name;
+    return railCell(h_flex()
+      .id(`pinned-space-c-${pinIdx}`)
+      .relative()
+      .w(RAIL_CELL)
+      .h(26)
+      .rounded(6)
+      .justify_center()
+      .items_center()
+      .when(on, (el) => el.bg(t.selected))
+      .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
+      .tooltip(name)
+      .on_click(() => (w ? run("space.select", { id: w.id }) : this.openPinned(pin)))
+      .child(div().text_color(on ? t.foreground : w ? t.muted : t.dim).child(spaceAvatar(name)))
+      .when(Boolean(w), (el) => el.child(div().absolute().right(5).text_color(tone(t, w.status)).child(glyph(w.status)))));
+  }
+
   row({ w, i, g, tree }, t) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
     const color = colors[w.id] ?? "ansi6";
     const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
+    const hoverKey = `space:${w.id}`;
+    const isHovered = this.hovered === hoverKey;
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
@@ -484,6 +755,11 @@ export default class Spaces extends View {
           .when(fromIndex < i, line => line.bottom(0))
           .when(fromIndex > i, line => line.top(0)),
       ))
+      .on_hover((over, cx) => {
+        if (over) this.hovered = hoverKey;
+        else if (this.hovered === hoverKey) this.hovered = null;
+        cx.notify();
+      })
       .on_mouse_down("left", () => {
         this.pressed = w.id;
         this.over = w.id;
@@ -515,7 +791,8 @@ export default class Spaces extends View {
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child(spaceAvatar(w.name))))
           .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
+          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
+          .when(isHovered, (el) => el.child(this.pinButton(w.id, false, (cx) => this.pinSpace(w, cx), t))),
       );
   }
 
@@ -567,7 +844,7 @@ export default class Spaces extends View {
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
+        .on_mouse_up("left", (_e, cx) => { this.pressed = null; this.over = null; this.pinPressed = null; this.pinOver = null; cx.notify(); })
         .children(list));
   }
 }

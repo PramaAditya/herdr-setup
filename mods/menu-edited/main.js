@@ -5,7 +5,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, HoverCard } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, hc, home } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, hc, home, shared, setShared } from "herdr";
 
 const OMP_SESSIONS_SCRIPT = `
 const fs = require("fs"), path = require("path");
@@ -88,6 +88,34 @@ function place(s) {
   return panes().find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
 }
 
+function normPath(p) {
+  return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function pinKeyOf(machine, folder, fallbackId) {
+  const norm = normPath(folder);
+  return norm ? `${machine ?? ""}\0${norm}` : `id:${fallbackId}`;
+}
+
+function readPinned() {
+  const raw = shared("spaces.pinned");
+  return Array.isArray(raw) ? raw.filter((p) => p && typeof p === "object" && typeof p.key === "string") : [];
+}
+
+function findPinnedForSpace(pins, space) {
+  if (!space) return null;
+  const byId = pins.find((p) => p.lastId && p.lastId === space.id);
+  if (byId) return byId;
+  const folder = place(space);
+  const fNorm = normPath(folder);
+  const sMachine = space.machine ?? null;
+  return pins.find((p) => {
+    if ((p.machine ?? null) !== sMachine) return false;
+    if (fNorm) return normPath(p.folder) === fNorm || normPath(space.folder) === normPath(p.folder);
+    return !normPath(p.folder) && p.name === space.name;
+  }) ?? null;
+}
+
 // A space's checkout: "main" (a repo's own), "linked" (a worktree), or null.
 async function checkout(folder, on) {
   const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd: folder, on });
@@ -131,18 +159,30 @@ function items(p, git, ompSessions = []) {
         ...(inTab ? [["Close pane", "pane.close", { pane: tg.pane }]] : []),
       ];
     }
-    case "tab":
+    case "tab": {
+      const sp = spaces().find((s) => s.id === tg.space);
+      const isPinned = Boolean(findPinnedForSpace(readPinned(), sp));
       return [
         ["Rename", "tab.rename", { id: tg.id }],
         ["New tab", "tab.new", { space: tg.space }],
-        ["Close", "tab.close", { id: tg.id }],
+        ["Close", "tab.close", isPinned ? { id: tg.id, confirmed: true } : { id: tg.id }],
       ];
-    case "space":
+    }
+    case "space": {
+      const sp = spaces().find((s) => s.id === tg.id);
+      const isPinned = Boolean(findPinnedForSpace(readPinned(), sp));
       return [
         ["Rename", "space.rename", { id: tg.id }],
+        [isPinned ? "Unpin space" : "Pin space", isPinned ? "space.unpin" : "space.pin", { id: tg.id }],
         ...(git ? [["New worktree", "worktree", { space: tg.id, action: "new" }], ["Open worktree", "worktree", { space: tg.id, action: "open" }]] : []),
         ...(git === "linked" ? [["Remove worktree", "worktree", { space: tg.id, action: "remove" }]] : []),
-        ["Close", "space.close", { id: tg.id }],
+        ["Close", "space.close", isPinned ? { id: tg.id, confirmed: true } : { id: tg.id }],
+      ];
+    }
+    case "pinned-space":
+      return [
+        ["Open space", "pinned.open", { key: tg.key }],
+        ["Unpin space", "pinned.unpin", { key: tg.key }],
       ];
     default:
       return [
@@ -158,6 +198,9 @@ function items(p, git, ompSessions = []) {
 
 function menuIcon(command, args) {
   if (command === "omp.resume.menu" || command === "omp.resume") return "icons/omp.svg";
+  if (command === "space.pin") return "mods/workspace-chrome/pin.svg";
+  if (command === "space.unpin" || command === "pinned.unpin") return "mods/workspace-chrome/pin-off.svg";
+  if (command === "pinned.open") return "mods/workspace-chrome/plus.svg";
   const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" ? (args?.direction === "down" ? "panel-bottom" : "panel-right") : command === "pane.zoom" ? "square" : "terminal";
   return `mods/workspace-chrome/${name}.svg`;
 }
@@ -224,7 +267,36 @@ export default class Menu extends View {
     }
     closeOverlay(props()?.overlay);
     if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
-    else run(it[1], it[2]);
+    else if (it[1] === "space.pin") {
+      const sp = spaces().find((s) => s.id === it[2]?.id);
+      if (sp) {
+        const folder = place(sp);
+        const machine = sp.machine ?? null;
+        const key = pinKeyOf(machine, folder, sp.id);
+        const colors = shared("space.colors") ?? {};
+        const color = colors[sp.id] ?? "ansi6";
+        const pins = readPinned();
+        if (!findPinnedForSpace(pins, sp) && !pins.some((p) => p.key === key)) {
+          setShared("spaces.pinned", [...pins, { key, name: sp.name, named: Boolean(sp.named), folder, machine, color, lastId: sp.id }]);
+        }
+      }
+    } else if (it[1] === "space.unpin") {
+      const sp = spaces().find((s) => s.id === it[2]?.id);
+      const pins = readPinned();
+      const found = findPinnedForSpace(pins, sp);
+      if (found) setShared("spaces.pinned", pins.filter((p) => p.key !== found.key));
+    } else if (it[1] === "pinned.open") {
+      const pin = readPinned().find((p) => p.key === it[2]?.key);
+      if (pin) {
+        const args = { machine: pin.machine ?? "" };
+        if (pin.folder) args.folder = pin.folder;
+        if (pin.named && pin.name) args.name = pin.name;
+        run("space.new", args);
+      }
+    } else if (it[1] === "pinned.unpin") {
+      const pins = readPinned();
+      setShared("spaces.pinned", pins.filter((p) => p.key !== it[2]?.key));
+    } else run(it[1], it[2]);
   }
 
   render(cx) {

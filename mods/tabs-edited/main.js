@@ -6,6 +6,22 @@ function normPath(p) {
   return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+function isSpacePinned(space) {
+  if (!space) return false;
+  const raw = shared("spaces.pinned");
+  if (!Array.isArray(raw) || !raw.length) return false;
+  if (raw.some((p) => p?.lastId && p.lastId === space.id)) return true;
+  const tabIds = new Set((space.tabs ?? []).map((c) => c.id));
+  const liveFolder = panes().find((p) => tabIds.has(p.tab) && p.cwd)?.cwd || space.folder;
+  const fNorm = normPath(liveFolder);
+  const sMachine = space.machine ?? null;
+  return raw.some((p) => {
+    if (!p || (p.machine ?? null) !== sMachine) return false;
+    if (fNorm) return normPath(p.folder) === fNorm || normPath(space.folder) === normPath(p.folder);
+    return !normPath(p.folder) && p.name === space.name;
+  });
+}
+
 function find(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
@@ -98,6 +114,12 @@ export default class Tabs extends View {
               run("layout.select", { stack: "panel-body", child: "browser" });
               run("layout.show", { id: "panel" });
               setShared("browser.focusUrl", Date.now());
+            }
+          } else if (cmd === "close-tab") {
+            const sp = spaces().find((p) => p.active);
+            const tab = sp?.tabs?.find((t) => t.active);
+            if (tab) {
+              run("tab.close", isSpacePinned(sp) ? { id: tab.id, confirmed: true } : { id: tab.id });
             }
           }
         }
@@ -223,7 +245,7 @@ export default class Tabs extends View {
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", isSpacePinned(space) ? { id: c.id, confirmed: true } : { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
@@ -285,6 +307,25 @@ export default class Tabs extends View {
           ))
       )
       .when(showKanban, el => el.child(panelButton("kanban", "Kanban", "mods/workspace-chrome/layers.svg")))
+      .when(Boolean(shared("browser.wideFullscreen")), el =>
+        el.child(
+          h_flex()
+            .id("exit-browser-wide-fs")
+            .h(26)
+            .px(9)
+            .gap(4)
+            .flex_none()
+            .items_center()
+            .rounded(6)
+            .text_size(12)
+            .bg(t.solid)
+            .text_color(t.solid_foreground)
+            .hover(s => s.opacity(0.9))
+            .on_mouse_down("left", stop)
+            .on_click(() => setShared("browser.exitWideFullscreen", Date.now()))
+            .child("⤡ Exit Fullscreen")
+        )
+      )
       .child(panelButton("browser", "Artifact Viewer", "mods/browser/globe.svg"))
       .child(panelButton("todoist", "Todoist", "mods/workspace-chrome/circle-check.svg"))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
