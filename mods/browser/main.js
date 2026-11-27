@@ -28,7 +28,7 @@ function findNode(node, id) {
   return null;
 }
 
-const DIRECT_FILE_RE = /\.(pdf|html?|svg|png|jpe?g|gif|webp|bmp|ico|mp4|webm|mp3|wav)$/i;
+const DIRECT_FILE_RE = /\.(pdf|html?|mp4|webm|mp3|wav)$/i;
 
 function isDarkTheme(t) {
   const bg = String(t?.background || "").replace("#", "");
@@ -149,6 +149,7 @@ function tabBadge(url) {
   if (/\.(md|mdx|markdown)([?#].*)?$/i.test(check)) return "MD";
   if (/\.jsonc?([?#].*)?$/i.test(check)) return "JSON";
   if (/\.html?([?#].*)?$/i.test(check)) return "HTML";
+  if (/\.(png|jpe?g|gif|webp|bmp|ico|svg)([?#].*)?$/i.test(check)) return "IMG";
   if (/\.(txt|log)([?#].*)?$/i.test(check)) return "TXT";
   if (vp) return "FILE";
   if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i.test(s)) return "DEV";

@@ -93,6 +93,7 @@ enum HostCmd {
     Reload,
     DevTools,
     Bounds(BoundsReq),
+    Fullscreen(bool),
     Quit,
 }
 
@@ -121,6 +122,7 @@ struct AppContext {
     last_bounds: Option<BoundsReq>,
     last_applied_rect: Option<(i32, i32, i32, i32)>,
     currently_shown: bool,
+    fullscreen: bool,
 }
 
 struct HwndWrapper(HWND);
@@ -509,6 +511,7 @@ fn apply_bounds(app: &mut AppContext, force: bool) {
             || IsWindowVisible(herdr) == 0;
 
         if !b.visible || b.width < 10.0 || b.height < 10.0 || herdr_hidden {
+            app.fullscreen = false;
             hide_container(app);
             app.state.lock().unwrap().visible = false;
             return;
@@ -521,35 +524,44 @@ fn apply_bounds(app: &mut AppContext, force: bool) {
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(herdr, &mut client);
         let client_w = (client.right - client.left) as f64;
+        let client_h = (client.bottom - client.top) as f64;
 
         let mut origin = POINT { x: 0, y: 0 };
         ClientToScreen(herdr, &mut origin);
 
-        let pw = (b.width * dpi_scale).round().max(1.0) as i32;
-        let ph = (b.height * dpi_scale).round().max(1.0) as i32;
-
-        let local_x = if let Some(x) = b.x {
-            (x * dpi_scale).round() as i32
-        } else if let Some(rm) = b.right_margin {
-            (client_w - (rm * dpi_scale * zoom) - (pw as f64))
-                .round()
-                .max(0.0) as i32
+        let (sx, sy, pw, ph) = if app.fullscreen {
+            (
+                origin.x,
+                origin.y,
+                client_w.round().max(100.0) as i32,
+                client_h.round().max(100.0) as i32,
+            )
         } else {
-            (client_w - (pw as f64) - (9.0 * dpi_scale * zoom))
-                .round()
-                .max(0.0) as i32
-        };
+            let pw = (b.width * dpi_scale).round().max(1.0) as i32;
+            let ph = (b.height * dpi_scale).round().max(1.0) as i32;
 
-        let local_y = if let Some(y) = b.y {
-            (y * dpi_scale).round() as i32
-        } else if let Some(tm) = b.top_margin {
-            (tm * dpi_scale * zoom).round() as i32
-        } else {
-            (119.0 * dpi_scale * zoom).round() as i32
-        };
+            let local_x = if let Some(x) = b.x {
+                (x * dpi_scale).round() as i32
+            } else if let Some(rm) = b.right_margin {
+                (client_w - (rm * dpi_scale * zoom) - (pw as f64))
+                    .round()
+                    .max(0.0) as i32
+            } else {
+                (client_w - (pw as f64) - (9.0 * dpi_scale * zoom))
+                    .round()
+                    .max(0.0) as i32
+            };
 
-        let sx = origin.x + local_x;
-        let sy = origin.y + local_y;
+            let local_y = if let Some(y) = b.y {
+                (y * dpi_scale).round() as i32
+            } else if let Some(tm) = b.top_margin {
+                (tm * dpi_scale * zoom).round() as i32
+            } else {
+                (119.0 * dpi_scale * zoom).round() as i32
+            };
+
+            (origin.x + local_x, origin.y + local_y, pw, ph)
+        };
         let rect_key = (sx, sy, pw, ph);
 
         if !force && app.currently_shown && app.last_applied_rect == Some(rect_key) {
@@ -628,9 +640,17 @@ fn process_commands(app: &mut AppContext) {
                 }
             }
             HostCmd::SelectTab(id) => {
+                if app.fullscreen {
+                    app.fullscreen = false;
+                    apply_bounds(app, true);
+                }
                 select_tab(app, &id);
             }
             HostCmd::CloseTab(id) => {
+                if app.fullscreen {
+                    app.fullscreen = false;
+                    apply_bounds(app, true);
+                }
                 close_tab(app, &id);
             }
             HostCmd::Navigate { id, url } => {
@@ -670,6 +690,10 @@ fn process_commands(app: &mut AppContext) {
             }
             HostCmd::Bounds(b) => {
                 app.last_bounds = Some(b);
+                apply_bounds(app, true);
+            }
+            HostCmd::Fullscreen(active) => {
+                app.fullscreen = active;
                 apply_bounds(app, true);
             }
             HostCmd::Quit => unsafe {
@@ -746,32 +770,48 @@ fn render_artifact_html(file_path: &str, theme_hint: &str) -> (String, String) {
     let mode = match ext.as_str() {
         "md" | "mdx" | "markdown" => "markdown",
         "json" | "jsonc" => "json",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg" => "image",
         _ => "text",
     };
 
-    let (content, err_msg) = match std::fs::read(&path_obj) {
-        Ok(bytes) => {
-            if bytes.len() > 4 * 1024 * 1024 {
-                let slice = &bytes[..4 * 1024 * 1024];
-                (
-                    String::from_utf8_lossy(slice).into_owned(),
-                    Some("File truncated at 4 MiB for preview.".to_string()),
-                )
-            } else if bytes.iter().take(4096).any(|&b| b == 0) {
-                (
-                    String::new(),
-                    Some("Binary file cannot be rendered as text.".to_string()),
-                )
-            } else {
-                (String::from_utf8_lossy(&bytes).into_owned(), None)
-            }
+    let base_dir = path_obj
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let (content, err_msg) = if mode == "image" {
+        if path_obj.exists() {
+            (String::new(), None)
+        } else {
+            (String::new(), Some(format!("File not found: {}", file_path)))
         }
-        Err(e) => (String::new(), Some(format!("Cannot read file: {}", e))),
+    } else {
+        match std::fs::read(&path_obj) {
+            Ok(bytes) => {
+                if bytes.len() > 4 * 1024 * 1024 {
+                    let slice = &bytes[..4 * 1024 * 1024];
+                    (
+                        String::from_utf8_lossy(slice).into_owned(),
+                        Some("File truncated at 4 MiB for preview.".to_string()),
+                    )
+                } else if bytes.iter().take(4096).any(|&b| b == 0) {
+                    (
+                        String::new(),
+                        Some("Binary file cannot be rendered as text.".to_string()),
+                    )
+                } else {
+                    (String::from_utf8_lossy(&bytes).into_owned(), None)
+                }
+            }
+            Err(e) => (String::new(), Some(format!("Cannot read file: {}", e))),
+        }
     };
 
     let payload = serde_json::json!({
         "name": file_name,
         "path": file_path,
+        "baseDir": base_dir,
         "ext": ext,
         "mode": mode,
         "theme": theme_hint,
@@ -932,7 +972,44 @@ fn render_artifact_html(file_path: &str, theme_hint: &str) -> (String, String) {
     text-align: left;
   }}
   .md-body th {{ background: var(--surface); font-weight: 600; }}
-  .md-body img {{ max-width: 100%; border-radius: 6px; }}
+  .md-body img {{
+    max-width: 100%;
+    border-radius: 6px;
+    cursor: zoom-in;
+    transition: opacity 0.12s;
+  }}
+  .md-body img:hover {{ opacity: 0.92; }}
+  .img-view-wrap {{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 120px);
+    padding: 20px;
+  }}
+  .img-view-card {{
+    position: relative;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background-color: var(--surface);
+    background-image: radial-gradient(var(--border) 1px, transparent 1px);
+    background-size: 16px 16px;
+    max-width: 100%;
+  }}
+  .img-view-card img {{
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 180px);
+    border-radius: 6px;
+    cursor: zoom-in;
+  }}
+  .mm-canvas img {{
+    display: block;
+    max-width: none !important;
+    user-select: none;
+    -webkit-user-drag: none;
+  }}
   .mermaid-wrap {{
     position: relative;
     margin: 14px 0;
@@ -1328,8 +1405,40 @@ function loadMermaid() {{
   return mermaidPromise;
 }}
 
-function openMermaidFullscreen(svgEl) {{
-  if (!svgEl) return;
+function resolveLocalImgSrc(src) {{
+  if (!src) return src;
+  if (/^(https?:|data:|blob:|\/raw\?)/i.test(src)) return src;
+  if (/^file:\/\//i.test(src)) {{
+    let p = decodeURIComponent(src.replace(/^file:\/+/i, ''));
+    if (/^[A-Za-z]:/.test(p)) p = p.replace(/\//g, '\\');
+    return '/raw?path=' + encodeURIComponent(p);
+  }}
+  if (/^[A-Za-z]:[\\/]/.test(src)) {{
+    return '/raw?path=' + encodeURIComponent(src);
+  }}
+  if (DATA.baseDir) {{
+    const sep = DATA.baseDir.includes('\\') ? '\\' : '/';
+    const joined = DATA.baseDir.replace(/[\\/]+$/, '') + sep + src.replace(/^\.[\\/]/, '');
+    return '/raw?path=' + encodeURIComponent(joined);
+  }}
+  return src;
+}}
+
+function setHostFullscreen(active) {{
+  return fetch('/fullscreen', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ active: Boolean(active) }})
+  }}).catch(() => {{}});
+}}
+
+function openLightbox(opts) {{
+  const {{ kind, svgEl, imgSrc }} = opts || {{}};
+  if (kind === 'svg' && !svgEl) return;
+  if (kind === 'image' && !imgSrc) return;
+
+  setHostFullscreen(true);
+
   const modal = document.createElement('div');
   modal.className = 'mm-modal';
 
@@ -1346,21 +1455,36 @@ function openMermaidFullscreen(svgEl) {{
 
   const canvas = document.createElement('div');
   canvas.className = 'mm-canvas';
-  const clone = svgEl.cloneNode(true);
-  clone.removeAttribute('style');
-  const vb = clone.getAttribute('viewBox');
-  let baseW = svgEl.getBoundingClientRect().width || 800;
-  let baseH = svgEl.getBoundingClientRect().height || 500;
-  if (vb) {{
-    const p = vb.split(/[\s,]+/).map(Number);
-    if (p.length === 4 && p[2] > 0 && p[3] > 0) {{
-      baseW = p[2];
-      baseH = p[3];
-      clone.setAttribute('width', String(baseW));
-      clone.setAttribute('height', String(baseH));
+
+  let baseW = 800;
+  let baseH = 500;
+
+  if (kind === 'svg') {{
+    const clone = svgEl.cloneNode(true);
+    clone.removeAttribute('style');
+    const vb = clone.getAttribute('viewBox');
+    baseW = svgEl.getBoundingClientRect().width || 800;
+    baseH = svgEl.getBoundingClientRect().height || 500;
+    if (vb) {{
+      const p = vb.split(/[\s,]+/).map(Number);
+      if (p.length === 4 && p[2] > 0 && p[3] > 0) {{
+        baseW = p[2];
+        baseH = p[3];
+        clone.setAttribute('width', String(baseW));
+        clone.setAttribute('height', String(baseH));
+      }}
     }}
+    canvas.appendChild(clone);
+  }} else {{
+    const img = document.createElement('img');
+    img.src = imgSrc;
+    img.onload = () => {{
+      baseW = img.naturalWidth || img.width || 800;
+      baseH = img.naturalHeight || img.height || 500;
+      fitToStage();
+    }};
+    canvas.appendChild(img);
   }}
-  canvas.appendChild(clone);
   stage.appendChild(canvas);
 
   const controls = document.createElement('div');
@@ -1379,17 +1503,18 @@ function openMermaidFullscreen(svgEl) {{
 
   function fitToStage() {{
     const r = stage.getBoundingClientRect();
-    const pad = 48;
+    if (r.width < 20 || r.height < 20) return;
+    const pad = 56;
     const sx = (r.width - pad * 2) / Math.max(baseW, 1);
     const sy = (r.height - pad * 2) / Math.max(baseH, 1);
-    scale = Math.min(Math.max(Math.min(sx, sy), 0.15), 2.5);
+    scale = Math.min(Math.max(Math.min(sx, sy), 0.1), 2.5);
     tx = (r.width - baseW * scale) / 2;
     ty = (r.height - baseH * scale) / 2;
     applyTransform();
   }}
 
   function zoomAt(factor, cx, cy) {{
-    const next = Math.min(Math.max(scale * factor, 0.1), 12);
+    const next = Math.min(Math.max(scale * factor, 0.1), 16);
     const ratio = next / scale;
     tx = cx - (cx - tx) * ratio;
     ty = cy - (cy - ty) * ratio;
@@ -1462,9 +1587,18 @@ function openMermaidFullscreen(svgEl) {{
 
   stage.addEventListener('dblclick', fitToStage);
 
+  let resizeTimer = null;
+  const onResize = () => {{
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(fitToStage, 40);
+  }};
+
   const close = () => {{
+    clearTimeout(resizeTimer);
     window.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', onResize);
     modal.remove();
+    setHostFullscreen(false);
   }};
   const onKey = (e) => {{
     if (e.key === 'Escape') close();
@@ -1480,6 +1614,7 @@ function openMermaidFullscreen(svgEl) {{
   }};
   closeTop.onclick = close;
   window.addEventListener('keydown', onKey);
+  window.addEventListener('resize', onResize);
 
   modal.appendChild(stage);
   modal.appendChild(hint);
@@ -1487,6 +1622,18 @@ function openMermaidFullscreen(svgEl) {{
   modal.appendChild(controls);
   document.body.appendChild(modal);
   requestAnimationFrame(fitToStage);
+  setTimeout(fitToStage, 120);
+}}
+
+function wireMarkdownImages() {{
+  root.querySelectorAll('.md-body img').forEach((img) => {{
+    const rawSrc = img.getAttribute('src');
+    if (rawSrc) {{
+      img.src = resolveLocalImgSrc(rawSrc);
+    }}
+    img.title = 'Click to open fullscreen zoom/pan viewer';
+    img.onclick = () => openLightbox({{ kind: 'image', imgSrc: img.src }});
+  }});
 }}
 
 function renderMermaidDiagrams() {{
@@ -1508,7 +1655,7 @@ function renderMermaidDiagrams() {{
         const btn = document.createElement('button');
         btn.className = 'mermaid-expand-btn';
         btn.textContent = '⤢ Fullscreen';
-        btn.onclick = () => openMermaidFullscreen(svgEl);
+        btn.onclick = () => openLightbox({{ kind: 'svg', svgEl }});
         wrap.appendChild(btn);
       }});
     }}).catch(() => {{}});
@@ -1519,12 +1666,30 @@ function draw() {{
   root.innerHTML = '';
   bar.innerHTML = '';
 
+  if (DATA.mode === 'image') {{
+    const imgUrl = '/raw?path=' + encodeURIComponent(DATA.path);
+    const wrap = document.createElement('div');
+    wrap.className = 'img-view-wrap';
+    const card = document.createElement('div');
+    card.className = 'img-view-card';
+    const img = document.createElement('img');
+    img.src = imgUrl;
+    img.title = 'Click to open fullscreen zoom/pan viewer';
+    img.onclick = () => openLightbox({{ kind: 'image', imgSrc: imgUrl }});
+    card.appendChild(img);
+    wrap.appendChild(card);
+    root.appendChild(wrap);
+    addBtn('⤢ Fullscreen', true, () => openLightbox({{ kind: 'image', imgSrc: imgUrl }}));
+    return;
+  }}
+
   if (DATA.mode === 'markdown') {{
     if (state.view === 'preview') {{
       const d = document.createElement('article');
       d.className = 'md-body';
       d.innerHTML = renderMarkdown(DATA.content);
       root.appendChild(d);
+      wireMarkdownImages();
       renderMermaidDiagrams();
     }} else {{
       root.appendChild(renderRaw(DATA.content, state.wrap));
@@ -1602,6 +1767,38 @@ fn handle_http(
     let (path, query) = parse_query(raw_path);
 
     let body = req.split("\r\n\r\n").nth(1).unwrap_or("").trim();
+
+    if method == "GET" && path == "/raw" {
+        let file_path = query.get("path").map(|s| s.as_str()).unwrap_or("");
+        let path_obj = PathBuf::from(file_path);
+        let ext = path_obj
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let mime = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "svg" => "image/svg+xml",
+            "bmp" => "image/bmp",
+            "ico" => "image/x-icon",
+            _ => "application/octet-stream",
+        };
+        if let Ok(bytes) = std::fs::read(&path_obj) {
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                mime,
+                bytes.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&bytes);
+        } else {
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+        return;
+    }
 
     if method == "GET" && path == "/view" {
         let file_path = query.get("path").map(|s| s.as_str()).unwrap_or("");
@@ -1740,6 +1937,25 @@ fn handle_http(
                     "400 Bad Request",
                     "{\"ok\":false,\"error\":\"invalid bounds\"}".into(),
                 )
+            }
+        }
+        ("POST", "/fullscreen") => {
+            #[derive(Deserialize)]
+            struct FsReq {
+                active: bool,
+            }
+            if let Ok(r) = serde_json::from_str::<FsReq>(body) {
+                state
+                    .lock()
+                    .unwrap()
+                    .queue
+                    .push_back(HostCmd::Fullscreen(r.active));
+                unsafe {
+                    PostMessageW(container_hwnd as HWND, WM_RUN_CMD, 0, 0);
+                }
+                ("200 OK", "{\"ok\":true}".into())
+            } else {
+                ("400 Bad Request", "{\"ok\":false}".into())
             }
         }
         ("POST", "/back") => {
@@ -1913,6 +2129,7 @@ fn main() {
         last_bounds: None,
         last_applied_rect: None,
         currently_shown: false,
+        fullscreen: false,
     });
 
     if let Some(first_id) = create_tab(&mut app, None, &initial_url) {
