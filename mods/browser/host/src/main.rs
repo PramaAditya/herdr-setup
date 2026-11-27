@@ -725,7 +725,9 @@ fn spawn_http_server(
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let state = Arc::clone(&state);
-            handle_http(stream, state, container_hwnd);
+            thread::spawn(move || {
+                handle_http(stream, state, container_hwnd);
+            });
         }
     });
 }
@@ -2289,6 +2291,8 @@ fn handle_http(
     state: Arc<Mutex<SharedState>>,
     container_hwnd: isize,
 ) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
     let mut buf = [0u8; 8192];
     let n = match stream.read(&mut buf) {
         Ok(n) if n > 0 => n,

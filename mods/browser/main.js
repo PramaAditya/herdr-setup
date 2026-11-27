@@ -204,7 +204,10 @@ export default class ArtifactViewer extends View {
         // Start host eagerly (hidden) if autoLocalhost is enabled or panel is visible
         if ((visible || this.autoLocalhost) && this.status === "idle" && !this._starting) {
           const pendingNav = shared("browser.navigate");
-          await this.ensureHost(pendingNav?.url || "about:blank", cx);
+          await this.ensureHost("about:blank", cx);
+          if (this.status === "ready" && (pendingNav?.path || pendingNav?.url)) {
+            await this.navigate(pendingNav.path || pendingNav.url, false, cx);
+          }
           cx.notify();
         }
         if (this.status === "ready") {
@@ -621,7 +624,24 @@ export default class ArtifactViewer extends View {
       .border_color(t.border)
       .child(iconBtn("br-back", "←", () => cx.spawn(() => this.post("/back")), !ready))
       .child(iconBtn("br-fwd", "→", () => cx.spawn(() => this.post("/forward")), !ready))
-      .child(iconBtn("br-reload", "↻", () => cx.spawn(() => this.post("/reload")), !ready))
+      .child(
+        iconBtn(
+          "br-reload",
+          "↻",
+          (_e, cx) =>
+            cx.spawn(async (cx) => {
+              if (this.currentUrl && /^file:\/\//i.test(this.currentUrl)) {
+                const upgraded = normalizeUrl(this.currentUrl, this.port, isDarkTheme(theme()));
+                if (upgraded !== this.currentUrl) {
+                  await this.navigate(this.currentUrl, false, cx);
+                  return;
+                }
+              }
+              await this.post("/reload");
+            }),
+          !ready
+        )
+      )
       .child(
         div()
           .flex_1()
