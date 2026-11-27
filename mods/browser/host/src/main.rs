@@ -11,7 +11,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, CreateSolidBrush, HBRUSH};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -93,6 +93,7 @@ enum HostCmd {
     Reload,
     DevTools,
     Bounds(BoundsReq),
+    Ping,
     Fullscreen(bool),
     Quit,
 }
@@ -121,6 +122,7 @@ struct AppContext {
     next_tab_seq: u64,
     last_bounds: Option<BoundsReq>,
     last_applied_rect: Option<(i32, i32, i32, i32)>,
+    last_visible_ping: Instant,
     currently_shown: bool,
     fullscreen: bool,
 }
@@ -510,7 +512,9 @@ fn apply_bounds(app: &mut AppContext, force: bool) {
             || IsIconic(herdr) != 0
             || IsWindowVisible(herdr) == 0;
 
-        if !b.visible || b.width < 10.0 || b.height < 10.0 || herdr_hidden {
+        let ping_expired = app.last_visible_ping.elapsed() > Duration::from_millis(650);
+
+        if !b.visible || b.width < 10.0 || b.height < 10.0 || herdr_hidden || ping_expired {
             app.fullscreen = false;
             hide_container(app);
             app.state.lock().unwrap().visible = false;
@@ -689,10 +693,20 @@ fn process_commands(app: &mut AppContext) {
                 }
             }
             HostCmd::Bounds(b) => {
+                if b.visible {
+                    app.last_visible_ping = Instant::now();
+                }
                 app.last_bounds = Some(b);
                 apply_bounds(app, true);
             }
+            HostCmd::Ping => {
+                app.last_visible_ping = Instant::now();
+                if !app.currently_shown {
+                    apply_bounds(app, true);
+                }
+            }
             HostCmd::Fullscreen(active) => {
+                app.last_visible_ping = Instant::now();
                 app.fullscreen = active;
                 apply_bounds(app, true);
             }
@@ -771,6 +785,10 @@ fn render_artifact_html(file_path: &str, theme_hint: &str) -> (String, String) {
         "md" | "mdx" | "markdown" => "markdown",
         "json" | "jsonc" => "json",
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg" => "image",
+        "docx" => "docx",
+        "pptx" => "pptx",
+        "xlsx" | "xls" => "excel",
+        "csv" => "csv",
         _ => "text",
     };
 
@@ -780,7 +798,8 @@ fn render_artifact_html(file_path: &str, theme_hint: &str) -> (String, String) {
         .unwrap_or("")
         .to_string();
 
-    let (content, err_msg) = if mode == "image" {
+    let is_binary_viewer = matches!(mode, "image" | "docx" | "pptx" | "excel");
+    let (content, err_msg) = if is_binary_viewer {
         if path_obj.exists() {
             (String::new(), None)
         } else {
@@ -1009,6 +1028,131 @@ fn render_artifact_html(file_path: &str, theme_hint: &str) -> (String, String) {
     max-width: none !important;
     user-select: none;
     -webkit-user-drag: none;
+  }}
+  .office-loading {{
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+  }}
+  .sheet-wrap {{
+    overflow: auto;
+    max-height: calc(100vh - 110px);
+    padding: 0 0 24px 0;
+  }}
+  .sheet-table {{
+    border-collapse: collapse;
+    font-size: 12.5px;
+    min-width: 100%;
+  }}
+  .sheet-table th, .sheet-table td {{
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    text-align: left;
+    white-space: nowrap;
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }}
+  .sheet-table th {{
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface);
+    font-weight: 600;
+    color: var(--fg);
+  }}
+  .sheet-table .row-num {{
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--surface);
+    color: var(--muted);
+    text-align: right;
+    width: 42px;
+    font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 11px;
+    user-select: none;
+  }}
+  .sheet-table tr:hover td:not(.row-num) {{
+    background: var(--surface);
+  }}
+  .pptx-list {{
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }}
+  .slide-card {{
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  }}
+  .slide-head {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    background: var(--bg);
+  }}
+  .slide-body {{
+    padding: 20px 24px;
+    min-height: 220px;
+  }}
+  .slide-body h2 {{
+    margin: 0 0 12px 0;
+    font-size: 1.35em;
+    line-height: 1.3;
+  }}
+  .slide-body p {{ margin: 6px 0; }}
+  .slide-body ul {{ margin: 8px 0; padding-left: 20px; }}
+  .slide-body li {{ margin: 4px 0; }}
+  .slide-body table {{
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 12.5px;
+  }}
+  .slide-body th, .slide-body td {{
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    text-align: left;
+  }}
+  .slide-media {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+  }}
+  .slide-media img {{
+    max-width: 100%;
+    max-height: 300px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    cursor: zoom-in;
+  }}
+  .slide-deck-wrap {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 120px);
+    padding: 24px;
+  }}
+  .slide-deck-wrap .slide-card {{
+    width: 100%;
+    max-width: 960px;
+  }}
+  .floating-bar {{
+    max-width: calc(100vw - 24px);
+    overflow-x: auto;
   }}
   .mermaid-wrap {{
     position: relative;
@@ -1243,9 +1387,9 @@ function inlineMd(s) {{
   out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
   out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2" />');
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-  out = out.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  out = out.replace(/~~(.+?)~~/g, '<del>$1</del>');
   out = out.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>');
   return out;
 }}
@@ -1382,28 +1526,405 @@ const root = document.getElementById('view-root');
 const bar = document.getElementById('floating-bar');
 let state = {{ view: DATA.mode === 'text' ? 'raw' : 'preview', wrap: true }};
 
-let mermaidPromise = null;
-function loadMermaid() {{
-  if (window.mermaid) return Promise.resolve(window.mermaid);
-  if (mermaidPromise) return mermaidPromise;
-  const urls = [
-    'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
-    'https://unpkg.com/mermaid@11/dist/mermaid.min.js'
-  ];
-  mermaidPromise = new Promise((resolve, reject) => {{
+const scriptCache = {{}};
+function loadScript(key, urls, globalCheck) {{
+  if (globalCheck()) return Promise.resolve(globalCheck());
+  if (scriptCache[key]) return scriptCache[key];
+  scriptCache[key] = new Promise((resolve, reject) => {{
     let idx = 0;
     const tryNext = () => {{
-      if (idx >= urls.length) return reject(new Error('mermaid load failed'));
+      if (idx >= urls.length) return reject(new Error(key + ' load failed'));
       const s = document.createElement('script');
       s.src = urls[idx++];
-      s.onload = () => resolve(window.mermaid);
+      s.onload = () => resolve(globalCheck());
       s.onerror = tryNext;
       document.head.appendChild(s);
     }};
     tryNext();
   }});
-  return mermaidPromise;
+  return scriptCache[key];
 }}
+
+function loadMermaid() {{
+  return loadScript('mermaid', [
+    'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js',
+    'https://unpkg.com/mermaid@11/dist/mermaid.min.js'
+  ], () => window.mermaid);
+}}
+
+function loadMammoth() {{
+  return loadScript('mammoth', [
+    'https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js',
+    'https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js'
+  ], () => window.mammoth);
+}}
+
+function loadXlsx() {{
+  return loadScript('xlsx', [
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+  ], () => window.XLSX);
+}}
+
+function loadJsZip() {{
+  return loadScript('jszip', [
+    'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+    'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'
+  ], () => window.JSZip);
+}}
+
+async function renderDocxView() {{
+  root.innerHTML = '<div class="office-loading">Loading Word document…</div>';
+  try {{
+    const [mammoth, resp] = await Promise.all([
+      loadMammoth(),
+      fetch('/raw?path=' + encodeURIComponent(DATA.path))
+    ]);
+    if (!resp.ok) throw new Error('Failed to load .docx file');
+    const buf = await resp.arrayBuffer();
+    const res = await mammoth.convertToHtml({{ arrayBuffer: buf }});
+    const art = document.createElement('article');
+    art.className = 'md-body';
+    art.innerHTML = res.value || '<p><em>Empty document</em></p>';
+    root.innerHTML = '';
+    root.appendChild(art);
+    wireMarkdownImages();
+    bar.innerHTML = '';
+    addBtn('DOCX Preview', true, () => {{}});
+    const sep = document.createElement('div'); sep.className = 'sep'; bar.appendChild(sep);
+    const copyBtn = addBtn('Copy Text', false, () => {{
+      navigator.clipboard?.writeText(art.innerText || '').then(() => {{
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => {{ copyBtn.textContent = 'Copy Text'; }}, 1200);
+      }});
+    }});
+  }} catch (e) {{
+    root.innerHTML = `<div class="err">DOCX preview failed: ${{esc(e.message || e)}}</div>`;
+  }}
+}}
+
+let cachedWorkbook = null;
+let activeSheetIdx = 0;
+
+function drawSheetTable(rows) {{
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap';
+  const tbl = document.createElement('table');
+  tbl.className = 'sheet-table';
+  const maxCols = rows.reduce((m, r) => Math.max(m, (r || []).length), 0);
+  if (!rows.length || !maxCols) {{
+    wrap.innerHTML = '<div class="office-loading">Empty sheet</div>';
+    return wrap;
+  }}
+  const colName = (n) => {{
+    let s = '';
+    let x = n;
+    while (x >= 0) {{
+      s = String.fromCharCode((x % 26) + 65) + s;
+      x = Math.floor(x / 26) - 1;
+    }}
+    return s;
+  }};
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  const corner = document.createElement('th');
+  corner.className = 'row-num';
+  corner.textContent = '#';
+  htr.appendChild(corner);
+  for (let c = 0; c < maxCols; c++) {{
+    const th = document.createElement('th');
+    th.textContent = colName(c);
+    htr.appendChild(th);
+  }}
+  thead.appendChild(htr);
+  tbl.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  const limit = Math.min(rows.length, 2000);
+  for (let r = 0; r < limit; r++) {{
+    const tr = document.createElement('tr');
+    const rn = document.createElement('td');
+    rn.className = 'row-num';
+    rn.textContent = String(r + 1);
+    tr.appendChild(rn);
+    const row = rows[r] || [];
+    for (let c = 0; c < maxCols; c++) {{
+      const td = document.createElement('td');
+      const val = row[c] === undefined || row[c] === null ? '' : String(row[c]);
+      td.textContent = val;
+      if (val.length > 36) td.title = val;
+      tr.appendChild(td);
+    }}
+    tbody.appendChild(tr);
+  }}
+  tbl.appendChild(tbody);
+  wrap.appendChild(tbl);
+  return wrap;
+}}
+
+async function renderExcelOrCsvView() {{
+  if (DATA.mode === 'csv' && state.view === 'raw') {{
+    root.innerHTML = '';
+    root.appendChild(renderRaw(DATA.content, state.wrap));
+    bar.innerHTML = '';
+    addBtn('Table', false, () => {{ state.view = 'preview'; renderExcelOrCsvView(); }});
+    addBtn('Raw', true, () => {{}});
+    return;
+  }}
+  if (!cachedWorkbook) {{
+    root.innerHTML = '<div class="office-loading">Loading spreadsheet…</div>';
+    try {{
+      const XLSX = await loadXlsx();
+      if (DATA.mode === 'csv') {{
+        cachedWorkbook = XLSX.read(DATA.content, {{ type: 'string' }});
+      }} else {{
+        const resp = await fetch('/raw?path=' + encodeURIComponent(DATA.path));
+        if (!resp.ok) throw new Error('Failed to load spreadsheet');
+        const buf = await resp.arrayBuffer();
+        cachedWorkbook = XLSX.read(buf, {{ type: 'array' }});
+      }}
+    }} catch (e) {{
+      root.innerHTML = `<div class="err">Spreadsheet preview failed: ${{esc(e.message || e)}}</div>`;
+      return;
+    }}
+  }}
+  const names = cachedWorkbook.SheetNames || [];
+  if (activeSheetIdx >= names.length) activeSheetIdx = 0;
+  const sheet = cachedWorkbook.Sheets[names[activeSheetIdx]];
+  const rows = window.XLSX.utils.sheet_to_json(sheet, {{ header: 1, defval: '' }});
+  root.innerHTML = '';
+  root.appendChild(drawSheetTable(rows));
+
+  bar.innerHTML = '';
+  if (DATA.mode === 'csv') {{
+    addBtn('Table', true, () => {{}});
+    addBtn('Raw', false, () => {{ state.view = 'raw'; renderExcelOrCsvView(); }});
+  }} else {{
+    names.forEach((name, idx) => {{
+      addBtn(name, idx === activeSheetIdx, () => {{
+        activeSheetIdx = idx;
+        renderExcelOrCsvView();
+      }});
+    }});
+  }}
+  const sep = document.createElement('div'); sep.className = 'sep'; bar.appendChild(sep);
+  const copyBtn = addBtn('Copy TSV', false, () => {{
+    const tsv = rows.map(r => (r || []).map(v => String(v ?? '')).join('\t')).join('\n');
+    navigator.clipboard?.writeText(tsv).then(() => {{
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => {{ copyBtn.textContent = 'Copy TSV'; }}, 1200);
+    }});
+  }});
+}}
+
+let cachedSlides = null;
+let pptxMode = 'scroll';
+let pptxIdx = 0;
+let pptxFullscreen = false;
+
+function buildSlideCard(slide, total) {{
+  const card = document.createElement('section');
+  card.className = 'slide-card';
+  const head = document.createElement('div');
+  head.className = 'slide-head';
+  head.innerHTML = `<span>Slide ${{slide.num}} / ${{total}}</span><span>${{esc(slide.title || '')}}</span>`;
+  card.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'slide-body';
+  if (slide.title) {{
+    const h2 = document.createElement('h2');
+    h2.textContent = slide.title;
+    body.appendChild(h2);
+  }}
+  if (slide.paragraphs.length) {{
+    const ul = document.createElement('ul');
+    for (const p of slide.paragraphs) {{
+      const li = document.createElement('li');
+      li.textContent = p;
+      ul.appendChild(li);
+    }}
+    body.appendChild(ul);
+  }}
+  for (const tblRows of slide.tables) {{
+    const tbl = document.createElement('table');
+    tblRows.forEach((r, ri) => {{
+      const tr = document.createElement('tr');
+      r.forEach((c) => {{
+        const cell = document.createElement(ri === 0 ? 'th' : 'td');
+        cell.textContent = c;
+        tr.appendChild(cell);
+      }});
+      tbl.appendChild(tr);
+    }});
+    body.appendChild(tbl);
+  }}
+  if (slide.images.length) {{
+    const mwrap = document.createElement('div');
+    mwrap.className = 'slide-media';
+    for (const src of slide.images) {{
+      const img = document.createElement('img');
+      img.src = src;
+      img.title = 'Click to open fullscreen zoom/pan viewer';
+      img.onclick = () => openLightbox({{ kind: 'image', imgSrc: src }});
+      mwrap.appendChild(img);
+    }}
+    body.appendChild(mwrap);
+  }}
+  if (!slide.title && !slide.paragraphs.length && !slide.tables.length && !slide.images.length) {{
+    body.innerHTML = '<p style="color:var(--muted)"><em>Empty slide</em></p>';
+  }}
+  card.appendChild(body);
+  return card;
+}}
+
+async function renderPptxView() {{
+  if (!cachedSlides) {{
+    root.innerHTML = '<div class="office-loading">Loading presentation…</div>';
+    try {{
+      const [JSZip, resp] = await Promise.all([
+        loadJsZip(),
+        fetch('/raw?path=' + encodeURIComponent(DATA.path))
+      ]);
+      if (!resp.ok) throw new Error('Failed to load .pptx file');
+      const buf = await resp.arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
+
+      const slideFiles = Object.keys(zip.files)
+        .filter((k) => /^ppt\/slides\/slide\d+\.xml$/i.test(k))
+        .sort((a, b) => {{
+          const na = parseInt(a.match(/slide(\d+)\.xml/i)[1], 10);
+          const nb = parseInt(b.match(/slide(\d+)\.xml/i)[1], 10);
+          return na - nb;
+        }});
+
+      const parser = new DOMParser();
+      const slides = [];
+      for (let i = 0; i < slideFiles.length; i++) {{
+        const sf = slideFiles[i];
+        const xmlStr = await zip.file(sf).async('string');
+        const doc = parser.parseFromString(xmlStr, 'application/xml');
+        const num = i + 1;
+        let title = '';
+        const paragraphs = [];
+        const tables = [];
+
+        const spList = doc.getElementsByTagName('p:sp');
+        for (const sp of spList) {{
+          const ph = sp.getElementsByTagName('p:ph')[0];
+          const phType = ph ? (ph.getAttribute('type') || '') : '';
+          const isTitle = phType === 'title' || phType === 'ctrTitle';
+          const pNodes = sp.getElementsByTagName('a:p');
+          for (const p of pNodes) {{
+            const tNodes = p.getElementsByTagName('a:t');
+            let line = '';
+            for (const t of tNodes) line += t.textContent || '';
+            line = line.trim();
+            if (!line) continue;
+            if (isTitle && !title) title = line;
+            else paragraphs.push(line);
+          }}
+        }}
+
+        const tblNodes = doc.getElementsByTagName('a:tbl');
+        for (const tbl of tblNodes) {{
+          const rows = [];
+          const trNodes = tbl.getElementsByTagName('a:tr');
+          for (const tr of trNodes) {{
+            const cells = [];
+            const tcNodes = tr.getElementsByTagName('a:tc');
+            for (const tc of tcNodes) {{
+              let txt = '';
+              for (const t of tc.getElementsByTagName('a:t')) txt += (t.textContent || '') + ' ';
+              cells.push(txt.trim());
+            }}
+            rows.push(cells);
+          }}
+          if (rows.length) tables.push(rows);
+        }}
+
+        const images = [];
+        const relPath = sf.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels';
+        if (zip.file(relPath)) {{
+          const relXml = await zip.file(relPath).async('string');
+          const relDoc = parser.parseFromString(relXml, 'application/xml');
+          const rels = relDoc.getElementsByTagName('Relationship');
+          for (const rel of rels) {{
+            const target = rel.getAttribute('Target') || '';
+            if (/\.(png|jpe?g|gif|webp|svg)$/i.test(target)) {{
+              const mediaPath = target.startsWith('../')
+                ? 'ppt/' + target.slice(3)
+                : 'ppt/slides/' + target;
+              const f = zip.file(mediaPath);
+              if (f) {{
+                const blob = await f.async('blob');
+                images.push(URL.createObjectURL(blob));
+              }}
+            }}
+          }}
+        }}
+
+        slides.push({{ num, title, paragraphs, tables, images }});
+      }}
+      cachedSlides = slides;
+    }} catch (e) {{
+      root.innerHTML = `<div class="err">PPTX preview failed: ${{esc(e.message || e)}}</div>`;
+      return;
+    }}
+  }}
+
+  root.innerHTML = '';
+  bar.innerHTML = '';
+  const total = cachedSlides.length;
+  if (!total) {{
+    root.innerHTML = '<div class="office-loading">No slides found</div>';
+    return;
+  }}
+
+  if (pptxMode === 'deck') {{
+    if (pptxIdx < 0) pptxIdx = 0;
+    if (pptxIdx >= total) pptxIdx = total - 1;
+    const wrap = document.createElement('div');
+    wrap.className = 'slide-deck-wrap';
+    wrap.appendChild(buildSlideCard(cachedSlides[pptxIdx], total));
+    root.appendChild(wrap);
+  }} else {{
+    const list = document.createElement('div');
+    list.className = 'pptx-list';
+    for (const s of cachedSlides) list.appendChild(buildSlideCard(s, total));
+    root.appendChild(list);
+  }}
+
+  addBtn('Scroll', pptxMode === 'scroll', () => {{ pptxMode = 'scroll'; renderPptxView(); }});
+  addBtn('Deck', pptxMode === 'deck', () => {{ pptxMode = 'deck'; renderPptxView(); }});
+  if (pptxMode === 'deck') {{
+    const sep1 = document.createElement('div'); sep1.className = 'sep'; bar.appendChild(sep1);
+    addBtn('←', false, () => {{ if (pptxIdx > 0) {{ pptxIdx--; renderPptxView(); }} }});
+    addBtn(`${{pptxIdx + 1}} / ${{total}}`, false, () => {{}});
+    addBtn('→', false, () => {{ if (pptxIdx < total - 1) {{ pptxIdx++; renderPptxView(); }} }});
+  }}
+  const sep2 = document.createElement('div'); sep2.className = 'sep'; bar.appendChild(sep2);
+  addBtn(pptxFullscreen ? '✕ Exit Fullscreen' : '⤢ Fullscreen', pptxFullscreen, () => {{
+    pptxFullscreen = !pptxFullscreen;
+    setHostFullscreen(pptxFullscreen);
+    renderPptxView();
+  }});
+}}
+
+window.addEventListener('keydown', (e) => {{
+  if (DATA.mode !== 'pptx') return;
+  if (e.key === 'Escape' && pptxFullscreen) {{
+    pptxFullscreen = false;
+    setHostFullscreen(false);
+    renderPptxView();
+  }} else if (pptxMode === 'deck' && e.key === 'ArrowRight' && cachedSlides && pptxIdx < cachedSlides.length - 1) {{
+    pptxIdx++;
+    renderPptxView();
+  }} else if (pptxMode === 'deck' && e.key === 'ArrowLeft' && pptxIdx > 0) {{
+    pptxIdx--;
+    renderPptxView();
+  }}
+}});
 
 function resolveLocalImgSrc(src) {{
   if (!src) return src;
@@ -1665,6 +2186,21 @@ function renderMermaidDiagrams() {{
 function draw() {{
   root.innerHTML = '';
   bar.innerHTML = '';
+
+  if (DATA.mode === 'docx') {{
+    renderDocxView();
+    return;
+  }}
+
+  if (DATA.mode === 'excel' || DATA.mode === 'csv') {{
+    renderExcelOrCsvView();
+    return;
+  }}
+
+  if (DATA.mode === 'pptx') {{
+    renderPptxView();
+    return;
+  }}
 
   if (DATA.mode === 'image') {{
     const imgUrl = '/raw?path=' + encodeURIComponent(DATA.path);
@@ -1939,6 +2475,13 @@ fn handle_http(
                 )
             }
         }
+        ("POST", "/ping") => {
+            state.lock().unwrap().queue.push_back(HostCmd::Ping);
+            unsafe {
+                PostMessageW(container_hwnd as HWND, WM_RUN_CMD, 0, 0);
+            }
+            ("200 OK", "{\"ok\":true}".into())
+        }
         ("POST", "/fullscreen") => {
             #[derive(Deserialize)]
             struct FsReq {
@@ -2128,6 +2671,7 @@ fn main() {
         next_tab_seq: 0,
         last_bounds: None,
         last_applied_rect: None,
+        last_visible_ping: Instant::now(),
         currently_shown: false,
         fullscreen: false,
     });

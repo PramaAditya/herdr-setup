@@ -146,6 +146,10 @@ function tabBadge(url) {
   const vp = extractViewPath(s);
   const check = vp || s;
   if (/\.pdf([?#].*)?$/i.test(check)) return "PDF";
+  if (/\.docx([?#].*)?$/i.test(check)) return "DOCX";
+  if (/\.pptx([?#].*)?$/i.test(check)) return "PPTX";
+  if (/\.xlsx?([?#].*)?$/i.test(check)) return "XLSX";
+  if (/\.csv([?#].*)?$/i.test(check)) return "CSV";
   if (/\.(md|mdx|markdown)([?#].*)?$/i.test(check)) return "MD";
   if (/\.jsonc?([?#].*)?$/i.test(check)) return "JSON";
   if (/\.html?([?#].*)?$/i.test(check)) return "HTML";
@@ -205,6 +209,9 @@ export default class ArtifactViewer extends View {
         }
         if (this.status === "ready") {
           await this.syncBounds(visible);
+          if (visible) {
+            await this.post("/ping").catch(() => {});
+          }
           const pollEvery = visible ? 3 : 8;
           if (tick % pollEvery === 0) {
             await this.pollStatus(cx);
