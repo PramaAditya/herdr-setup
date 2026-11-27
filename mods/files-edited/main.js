@@ -243,6 +243,18 @@ export default class Files extends View {
     if (!path || !this.root) return;
     const fullPath = `${this.root}/${path}`;
     const name = path.split(/[\\/]/).pop() || path;
+    if (!this.on) {
+      const norm = fullPath.replace(/\\/g, "/");
+      const encoded = norm
+        .split("/")
+        .map((seg, i) => (i === 0 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
+        .join("/");
+      const url = encoded.startsWith("/") ? `file://${encoded}` : `file:///${encoded}`;
+      setShared("browser.navigate", { path: fullPath, url, title: name, newTab: true, ts: Date.now() });
+      run("layout.select", { stack: "panel-body", child: "browser" });
+      run("layout.show", { id: "panel" });
+      return;
+    }
     const space = spaces().find(s => s.active);
     const existing = space?.tabs.find(t => t.named && t.name === name && panes().some(p => p.tab === t.id && !p.terminal));
     if (existing) {

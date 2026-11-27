@@ -8,6 +8,7 @@ const TARGETS = [
     name: "Herdr",
     tooltip: "Split down: new terminal in Herdr (~/.config/herdr-app)",
     folder: () => appHome(),
+    argv: ["agy", "--dangerously-skip-permissions", "-c"],
     icon: () => image("frame/welcome/herdr.png").size(16).rounded(3),
   },
   {
@@ -15,7 +16,15 @@ const TARGETS = [
     name: "OMP",
     tooltip: "Split down: new terminal in OMP (~/.omp)",
     folder: () => `${home().replace(/[\\/]+$/, "")}/.omp`,
+    argv: ["agy", "--dangerously-skip-permissions", "-c"],
     icon: (t) => svg("icons/omp.svg").size(15).text_color(t.muted),
+  },
+  {
+    id: "chat",
+    name: "Chat",
+    tooltip: "Split down: new terminal in D:/Chats",
+    folder: () => "D:/Chats",
+    icon: (t) => svg("mods/herdr-omp/chat.svg").size(15).text_color(t.muted),
   },
 ];
 
@@ -65,7 +74,7 @@ export default class HerdrOmp extends View {
                 run("terminal.open", {
                   place: "down",
                   folder: target.folder(),
-                  argv: ["agy", "--dangerously-skip-permissions", "-c"],
+                  ...(target.argv ? { argv: target.argv } : {}),
                   name: target.name,
                 })
               )

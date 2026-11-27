@@ -42,13 +42,44 @@ function leadPanes(all) {
   return leads;
 }
 
-function title(tab, l) {
+const TITLE_CACHE_KEY = "agent.session.titles";
+
+function readTitleCache() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TITLE_CACHE_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveReportMsg(term, cache) {
+  if (!term?.address) return "";
+  const key = `${term.address}:${term.program?.key ?? ""}`;
+  const labeled = clean(term.labels?.["agy.title"]);
+  // Antigravity puts the reply snippet in report.msg when idle/done; only trust report.msg while working.
+  const workingMsg = term.status === "working" ? clean(term.report?.msg) : "";
+  const fresh = labeled || workingMsg;
+  if (fresh) {
+    if (cache[key] !== fresh) {
+      cache[key] = fresh;
+      try { localStorage.setItem(TITLE_CACHE_KEY, JSON.stringify(cache)); } catch {}
+    }
+    return fresh;
+  }
+  return typeof cache[key] === "string" ? cache[key] : "";
+}
+
+function title(tab, l, terms, titleCache) {
   const prog = l?.program?.name;
   const live = clean(l?.title);
+  const addr = l?.terminal ?? l?.address;
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.
   const path = /^[~/]|^[A-Za-z]:\\/.test((l?.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
-  const telling = live && live !== (l?.terminal ?? l?.address) && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
-  return (tab.name === prog || !tab.named) && telling ? live : tab.name;
+  const telling = live && live !== addr && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
+  const msg = resolveReportMsg(terms?.get(addr), titleCache);
+  const resolved = telling ? live : (msg && msg !== prog && msg.toLowerCase() !== l?.program?.key ? msg : "");
+  return (tab.name === prog || !tab.named) && resolved ? resolved : tab.name;
 }
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
@@ -458,10 +489,12 @@ export default class Agents extends View {
     // otherwise read the same.
     // Read the pane snapshot once: every host read copies the whole list into JS.
     const leads = leadPanes(panes());
+    const terms = new Map(all.map(term => [term.address, term]));
+    const titleCache = this.titleCache ?? (this.titleCache = readTitleCache());
     const labels = new Map(list.map(a => {
       const tab = tabs.get(a.tab);
       const many = tabCounts.get(a.tab) > 1;
-      return [a.address, tab ? title(many ? { ...tab, named: false } : tab, many ? a : leads.get(a.tab)) : (a.title || a.program?.name || "")];
+      return [a.address, tab ? title(many ? { ...tab, named: false } : tab, many ? a : leads.get(a.tab), terms, titleCache) : (resolveReportMsg(terms.get(a.address), titleCache) || a.title || a.program?.name || "")];
     }));
     const label = (a) => labels.get(a.address);
     const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) ? null : label(a)]));

@@ -6,7 +6,48 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, props, run, theme, home, layout, readTextFile } from "herdr";
+import { panes, terminals, props, run, theme, home, layout, readTextFile } from "herdr";
+
+const isPathTitle = (s) => /^[~/]|^[A-Za-z]:\\/.test((s ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
+
+const TITLE_CACHE_KEY = "agent.session.titles";
+
+function readTitleCache() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TITLE_CACHE_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveReportMsg(term, cache) {
+  if (!term?.address) return "";
+  const key = `${term.address}:${term.program?.key ?? ""}`;
+  const labeled = typeof term.labels?.["agy.title"] === "string" ? term.labels["agy.title"].trim() : "";
+  // Antigravity puts the reply snippet in report.msg when idle/done; only trust report.msg while working.
+  const workingMsg = term.status === "working" && typeof term.report?.msg === "string" ? term.report.msg.trim() : "";
+  const fresh = labeled || workingMsg;
+  if (fresh) {
+    if (cache[key] !== fresh) {
+      cache[key] = fresh;
+      try { localStorage.setItem(TITLE_CACHE_KEY, JSON.stringify(cache)); } catch {}
+    }
+    return fresh;
+  }
+  return typeof cache[key] === "string" ? cache[key] : "";
+}
+
+function agentTitle(p, cache) {
+  const raw = (p.title ?? "").trim();
+  const prog = p.program?.name;
+  const telling = raw && raw !== p.terminal && raw !== prog && !isPathTitle(raw) && !raw.includes("@") && raw.toLowerCase() !== p.program?.key;
+  if (telling) return raw;
+  const term = p.terminal ? terminals().find((t) => t.address === p.terminal) : null;
+  const msg = resolveReportMsg(term, cache);
+  if (msg) return msg;
+  return prog || "shell";
+}
 
 // Match the first visible tab frame, including the active child of a stack.
 function paneFrame(node) {
@@ -40,6 +81,7 @@ export default class Pane extends View {
     this.hovered = false;
     this.ctxPct = null;
     this.alive = true;
+    this.titleCache = readTitleCache();
     const poll = async () => {
       const p = this.me();
       if (!p?.program?.agent || !p?.terminal) {
@@ -87,7 +129,7 @@ export default class Pane extends View {
     const t = theme();
     const p = this.me();
     if (!p) return div();
-    const name = p.name || (p.program?.agent ? p.title : (p.program?.shell && p.program.name)) || p.title || p.program?.name || "shell";
+    const name = p.name || (p.program?.agent ? agentTitle(p, this.titleCache ?? (this.titleCache = readTitleCache())) : (p.program?.shell && p.program.name)) || p.title || p.program?.name || "shell";
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;

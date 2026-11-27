@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { checking, nextCommand, spaces, panes, focused, exec, run, openOverlay, theme, window, shared, setShared, layout, settings } from "herdr";
+import { checking, nextCommand, spaces, panes, terminals, focused, exec, run, openOverlay, theme, window, shared, setShared, layout, settings } from "herdr";
 
 function normPath(p) {
   return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -18,9 +18,37 @@ function find(node, id) {
 // Same as the agents mod: drops a status glyph, keeps a leading bracket or quote.
 const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, "").replace(/^\[ [!.] \] /, "").trim();
 
+const TITLE_CACHE_KEY = "agent.session.titles";
+
+function readTitleCache() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TITLE_CACHE_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveReportMsg(term, cache) {
+  if (!term?.address) return "";
+  const key = `${term.address}:${term.program?.key ?? ""}`;
+  const labeled = clean(term.labels?.["agy.title"]);
+  // Antigravity puts the reply snippet in report.msg when idle/done; only trust report.msg while working.
+  const workingMsg = term.status === "working" ? clean(term.report?.msg) : "";
+  const fresh = labeled || workingMsg;
+  if (fresh) {
+    if (cache[key] !== fresh) {
+      cache[key] = fresh;
+      try { localStorage.setItem(TITLE_CACHE_KEY, JSON.stringify(cache)); } catch {}
+    }
+    return fresh;
+  }
+  return typeof cache[key] === "string" ? cache[key] : "";
+}
+
 // A tab Herdr named (unnamed, or after its program) follows its agent's live
 // title, as the agents list does; a name the person gave stays.
-function label(tab, lead) {
+function label(tab, lead, terms, titleCache) {
   const prog = lead?.program?.name;
   const base = tab.named ? tab.name : prog ?? "Terminal";
   if (!lead?.program?.agent) return base;
@@ -28,7 +56,9 @@ function label(tab, lead) {
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.
   const path = /^[~/]|^[A-Za-z]:\\/.test((lead.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
   const telling = live && live !== lead.terminal && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== lead.program.key;
-  return (tab.name === prog || !tab.named) && telling ? live : base;
+  const msg = resolveReportMsg(terms?.get(lead.terminal), titleCache);
+  const resolved = telling ? live : (msg && msg !== prog && msg.toLowerCase() !== lead.program.key ? msg : "");
+  return (tab.name === prog || !tab.named) && resolved ? resolved : base;
 }
 
 export default class Tabs extends View {
@@ -40,6 +70,8 @@ export default class Tabs extends View {
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
     this.kanbanCache = new Map();
     this.kanbanPending = new Set();
+    this.stripW = 0;
+    this.tabWidths = new Map();
     if (cx && !checking()) {
       cx.spawn(async () => {
         for (;;) {
@@ -55,6 +87,17 @@ export default class Tabs extends View {
               run("layout.select", { stack: "panel-body", child: "todoist" });
               run("layout.show", { id: "panel" });
               setShared("todoist.focusQuickAdd", Date.now());
+            }
+          } else if (cmd === "toggle-browser") {
+            const root = layout();
+            const panel = find(root, "panel");
+            const body = find(root, "panel-body");
+            if (panel && !panel.hidden && body?.active === "browser") {
+              run("layout.hide", { id: "panel" });
+            } else {
+              run("layout.select", { stack: "panel-body", child: "browser" });
+              run("layout.show", { id: "panel" });
+              setShared("browser.focusUrl", Date.now());
             }
           }
         }
@@ -152,13 +195,21 @@ export default class Tabs extends View {
     const stop = (_e, cx) => cx.stop_propagation();
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
+    const terms = new Map(terminals().map(term => [term.address, term]));
+    const titleCache = this.titleCache ?? (this.titleCache = readTitleCache());
     const item = (c, i, inScroll = true) => {
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program;
-      const name = label(c, lead);
+      const name = label(c, lead, terms, titleCache);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
-        // A rename or status dot on this or an earlier tab can push the active one out.
-        .when(inScroll && i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
+        // Track each tab's rendered width so `+` hugs the last tab when everything fits and pins right on overflow.
+        .on_size_change((size, cx) => {
+          const prev = this.tabWidths.get(c.id) ?? 0;
+          const changed = Math.abs(size.width - prev) > 1;
+          if (changed) this.tabWidths.set(c.id, size.width);
+          if (inScroll && i <= active) this.scroll.scroll_to_item(active);
+          if (changed || (inScroll && i <= active)) cx.notify();
+        })
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = c.id; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
@@ -196,7 +247,7 @@ export default class Tabs extends View {
       run("layout.hide", { id: "panel" });
     }
     const baseEnabled = shared("workspace.panels") ?? ["files", "changes"];
-    const enabled = [...(showKanban ? ["kanban"] : []), "todoist", ...baseEnabled];
+    const enabled = [...(showKanban ? ["kanban"] : []), "browser", "todoist", ...baseEnabled];
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
@@ -208,14 +259,33 @@ export default class Tabs extends View {
           else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
         }).child(svg(icon).size(14)).child(label);
     };
+    const newTabBtn = () => button("tab-new", "+", () => openOverlay({ mod: "new-menu-edited", kind: "popup", width: 250, height: 512 }));
+    const measuredTabsW = shown.reduce((sum, c) => sum + (this.tabWidths.get(c.id) ?? 0), 0) + Math.max(0, shown.length - 1) * 3;
+    const allMeasured = shown.length > 0 && shown.every(c => (this.tabWidths.get(c.id) ?? 0) > 0);
+    // Pin `+` to the right edge of the tab strip once tabs overflow; otherwise keep it right beside the last tab.
+    const overflowing = allMeasured && this.stripW > 0 && (measuredTabsW + 30 > this.stripW);
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => this.wheel(e))
-      .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
-        .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
-        .children(shown.map((c, i) => item(c, i, true))))
-      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu-edited", kind: "popup", width: 250, height: 512 })))
+      .child(
+        h_flex().id("tab-strip-wrap").flex_1().min_w(0).h_full().items_center().gap(3)
+          .on_size_change((size, cx) => {
+            if (Math.abs(size.width - this.stripW) > 1) {
+              this.stripW = size.width;
+              cx.notify();
+            }
+          })
+          .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
+            .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
+            .children(shown.map((c, i) => item(c, i, true)))
+            .when(!overflowing, el => el.child(newTabBtn())))
+          .when(overflowing, el => el.child(
+            h_flex().flex_none().h(20).pl(4).items_center().border_l(1).border_color(t.border)
+              .child(newTabBtn())
+          ))
+      )
       .when(showKanban, el => el.child(panelButton("kanban", "Kanban", "mods/workspace-chrome/layers.svg")))
+      .child(panelButton("browser", "Artifact Viewer", "mods/browser/globe.svg"))
       .child(panelButton("todoist", "Todoist", "mods/workspace-chrome/circle-check.svg"))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))

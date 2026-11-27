@@ -22,3 +22,7 @@ AGENTS.md
 *.d.ts
 mods/*/gpui-kit.d.ts
 mods/*/jsconfig.json
+
+# Rust build artifacts & compiled host binary
+mods/browser/host/target/
+mods/browser/herdr-webview.exe

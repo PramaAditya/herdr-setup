@@ -1,0 +1,10 @@
+{
+  "place": "none",
+  "title": "Artifact Viewer",
+  "focusable": true,
+  "link_handlers": [
+    { "kind": "url", "pattern": "^https?://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:\\d+)?(/|$)" },
+    { "kind": "url", "pattern": "(?i)^https?://.+\\.pdf([?#].*)?$" },
+    { "kind": "file", "pattern": ".+" }
+  ]
+}
