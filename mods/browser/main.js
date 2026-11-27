@@ -484,11 +484,18 @@ export default class ArtifactViewer extends View {
 
   async closeTab(id, cx) {
     if (!this.port || !id) return;
+    const isLastTab = this.tabs.length <= 1;
     await this.post("/tabs/close", { id });
+    if (isLastTab) {
+      await this.syncBounds(false);
+      run("layout.hide", { id: "panel" });
+    }
     const st = await this.getStatus(this.port);
     if (st?.ok) this.applyStatus(st);
-    this.lastSentBoundsKey = "";
-    await this.syncBounds(this.isPanelVisible());
+    if (!isLastTab) {
+      this.lastSentBoundsKey = "";
+      await this.syncBounds(this.isPanelVisible());
+    }
     cx.notify();
   }
 

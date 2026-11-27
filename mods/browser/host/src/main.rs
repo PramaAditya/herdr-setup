@@ -217,9 +217,75 @@ fn find_herdr_hwnd() -> Option<HWND> {
     }
 }
 
-/// Enumerate IPv4 TCP listening ports bound to 127.0.0.1 or 0.0.0.0.
+fn get_process_names() -> HashMap<u32, String> {
+    let mut map = HashMap::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == 0 as _ || snap == -1isize as _ {
+            return map;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snap, &mut entry) != 0 {
+            loop {
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let name = String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase();
+                map.insert(entry.th32ProcessID, name);
+                if Process32NextW(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        windows_sys::Win32::Foundation::CloseHandle(snap);
+    }
+    map
+}
+
+fn is_ignored_process(name: &str) -> bool {
+    const IGNORED_PREFIXES: &[&str] = &[
+        "agy",
+        "antigravity",
+        "language_server",
+        "herdr",
+        "msedge",
+        "chrome",
+        "chromium",
+        "helium",
+        "firefox",
+        "code",
+        "cursor",
+        "svchost",
+        "system",
+        "services",
+        "lsass",
+        "ollama",
+        "docker",
+        "com.docker",
+        "wsl",
+        "omp",
+        "claude",
+        "gemini",
+        "codex",
+        "opencode",
+        "zapfast",
+        "gsb",
+        "adb",
+        "xdm",
+        "terminal64",
+        "applemobiledevice",
+    ];
+    IGNORED_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// Enumerate IPv4 TCP listening ports bound to 127.0.0.1 or 0.0.0.0
+/// in the standard dev-server range (1024..=9999), excluding internal CLI/IDE/agent processes.
 fn list_local_listening_ports() -> HashSet<u16> {
     let mut ports = HashSet::new();
+    let proc_names = get_process_names();
     unsafe {
         let mut size: u32 = 0;
         let _ = GetExtendedTcpTable(
@@ -260,9 +326,16 @@ fn list_local_listening_ports() -> HashSet<u16> {
                 continue;
             }
             let port = u16::from_be((row.dwLocalPort & 0xFFFF) as u16);
-            if port >= 1024 {
-                ports.insert(port);
+            // Focus on standard web dev-server port range (1024..=9999)
+            if !(1024..=9999).contains(&port) {
+                continue;
             }
+            if let Some(pname) = proc_names.get(&row.dwOwningPid) {
+                if is_ignored_process(pname) {
+                    continue;
+                }
+            }
+            ports.insert(port);
         }
     }
     ports
@@ -282,9 +355,18 @@ fn probe_http_port(port: u16) -> bool {
     {
         return false;
     }
-    let mut buf = [0u8; 16];
+    let mut buf = [0u8; 32];
     match stream.read(&mut buf) {
-        Ok(n) if n >= 5 => buf[..n].starts_with(b"HTTP/"),
+        Ok(n) if n >= 12 => {
+            let line = String::from_utf8_lossy(&buf[..n]);
+            // Only accept real HTTP 2xx/3xx web responses (skip 400/TLS/404 RPC endpoints)
+            if let Some(rest) = line.strip_prefix("HTTP/") {
+                let code = rest.split_whitespace().nth(1).unwrap_or("");
+                code.starts_with('2') || code.starts_with('3')
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
