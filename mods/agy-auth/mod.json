@@ -1,0 +1,15 @@
+{
+  "place": "none",
+  "overlay": {
+    "width": 410,
+    "height": 585
+  },
+  "palette": [
+    {
+      "title": "Antigravity accounts (agy-auth)",
+      "command": "mod.open",
+      "args": { "name": "agy-auth" },
+      "words": "agy auth account quota switch rotate"
+    }
+  ]
+}

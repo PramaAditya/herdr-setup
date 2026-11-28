@@ -6,7 +6,28 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, terminals, props, run, theme, home, layout, readTextFile } from "herdr";
+import { panes, terminals, props, run, theme, home, layout, readTextFile, checking, exec, hc, openOverlay, shared, window } from "herdr";
+
+const AGY_CACHE_KEY = "agy-auth.cache";
+const AGY_WIN_BIN = "C:\\nvm4w\\nodejs\\node_modules\\@fikrilal\\agy-auth\\npm\\vendor\\agy-auth-win32-x64.exe";
+
+async function readLiveAgyAlias() {
+  const isWin = window()?.platform === "windows";
+  const candidates = isWin ? [AGY_WIN_BIN, "agy-auth.cmd", "agy-auth"] : ["agy-auth"];
+  for (const bin of candidates) {
+    try {
+      const res = await exec(bin, ["list", "--no-usage", "--no-sync", "--json"], { timeout: 6000 });
+      if (res?.code === 0 && res.stdout) {
+        const parsed = JSON.parse(res.stdout);
+        const cur = parsed?.data?.current ?? (parsed?.data?.accounts ?? []).find((a) => a.active) ?? null;
+        if (cur) return cur.alias || (cur.email ? cur.email.split("@")[0] : cur.id) || null;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  return shared(AGY_CACHE_KEY)?.activeAlias ?? null;
+}
 
 const isPathTitle = (s) => /^[~/]|^[A-Za-z]:\\/.test((s ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
 
@@ -81,7 +102,12 @@ export default class Pane extends View {
     this.hovered = false;
     this.ctxPct = null;
     this.alive = true;
+    this.wasAgy = false;
+    this.needsRestamp = false;
+    this.stamping = false;
+    this.stampedAccount = null;
     this.titleCache = readTitleCache();
+    if (checking()) return;
     const poll = async () => {
       const p = this.me();
       if (!p?.program?.agent || !p?.terminal) {
@@ -111,6 +137,26 @@ export default class Pane extends View {
     return panes().find((p) => p.pane === props()?.pane);
   }
 
+  stampAgyAccount(termAddr, cx) {
+    if (!termAddr || termAddr.includes("/") || this.stamping || checking()) return;
+    this.stamping = true;
+    this.needsRestamp = false;
+    cx.spawn(async (cx) => {
+      try {
+        const alias = await readLiveAgyAlias();
+        if (alias) {
+          this.stampedAccount = alias;
+          await hc(["label", termAddr, `agy.account=${alias}`]);
+          cx.notify();
+        }
+      } catch {
+        // best-effort label stamping
+      } finally {
+        this.stamping = false;
+      }
+    });
+  }
+
   button(t, id, icon, command, args) {
     return div()
       .id(id)
@@ -133,6 +179,27 @@ export default class Pane extends View {
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;
+    const isAgy = p.program?.key === "antigravity";
+    const term = p.terminal ? terminals().find((x) => x.address === p.terminal) : null;
+    const labeledAccount = typeof term?.labels?.["agy.account"] === "string" ? term.labels["agy.account"].trim() : "";
+
+    if (!isAgy && this.wasAgy) {
+      this.needsRestamp = true;
+      this.stampedAccount = null;
+    }
+    this.wasAgy = isAgy;
+    if (isAgy && p.terminal && ((!labeledAccount && !this.stampedAccount) || this.needsRestamp)) {
+      this.stampAgyAccount(p.terminal, cx);
+    }
+
+    const agyAccount = isAgy ? (labeledAccount || this.stampedAccount || null) : null;
+    const globalAlias = shared(AGY_CACHE_KEY)?.activeAlias ?? null;
+    const agyStale = Boolean(agyAccount && globalAlias && agyAccount !== globalAlias);
+    const agyBadgeTip = agyStale
+      ? `Running as ${agyAccount} · global is now ${globalAlias} (restart agy to switch)`
+      : agyAccount
+        ? `Antigravity CLI account: ${agyAccount} (matches global) — click to manage`
+        : "";
     const bottom = paneFrame(layout())?.header?.position === "bottom";
     return h_flex()
       .id(`pane-head-${pane}`)
@@ -150,6 +217,30 @@ export default class Pane extends View {
       .when(Boolean(pic), (el) => el.child(pic))
       .child(div().flex_none().truncate().max_w(520).font_medium().text_color(t.foreground).child(name))
       .child(div().flex_1().truncate().text_color(t.dim).child(folder(p.cwd)))
+      .when(Boolean(agyAccount), el => el.child(
+        h_flex()
+          .id(`ph-agy-${pane}`)
+          .h(18)
+          .px(6)
+          .gap(4)
+          .flex_none()
+          .items_center()
+          .rounded(5)
+          .border(1)
+          .border_color(agyStale ? "#f59e0b66" : t.border)
+          .bg(agyStale ? "#f59e0b1a" : t.raised)
+          .text_size(10.8)
+          .text_color(agyStale ? "#f59e0b" : t.muted)
+          .cursor_pointer()
+          .tooltip(agyBadgeTip)
+          .hover(s => s.bg(agyStale ? "#f59e0b2b" : t.hover).text_color(agyStale ? "#fbbf24" : t.foreground))
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            openOverlay({ mod: "agy-auth", kind: "popup", width: 410, height: 585, at: "pointer" });
+          })
+          .child(div().size(5).rounded(3).flex_none().bg(agyStale ? "#f59e0b" : "#22c55e"))
+          .child(agyAccount)
+      ))
       .when(p.program?.agent && this.ctxPct !== null, el => el.child(div().flex_none().text_size(11).text_color(this.ctxPct >= 90 ? t.error : this.ctxPct >= 80 ? t.warning : t.dim).child(`${this.ctxPct}%`)))
       .when(st === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
